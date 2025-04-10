@@ -1,0 +1,6 @@
+TODO:
+[ ] simple server accepting messages emulating rabbit mq
+[ ] endpoint collecting messages
+[ ] batcher
+[ ] highload wallet sender
+[ ] status checker

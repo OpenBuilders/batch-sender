@@ -1,0 +1,38 @@
+version: "3.8"
+services:
+  queue:
+    image: redis:7
+    command: ["redis-server",
+        "--appendonly", "yes",
+        "--save", "60", "1",
+        "--loglevel", "warning"]
+    ports:
+      - "${QUEUE_FORWARD_PORT:-6379}:6379"
+    volumes:
+      - "./data/queue:/data"
+    networks:
+      sticky_net: 
+        ipv4_address: 172.22.2.4
+
+  rabbitmq:
+    image: rabbitmq:3-management
+    container_name: rabbitmq
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    environment:
+      RABBITMQ_DEFAULT_USER: guest
+      RABBITMQ_DEFAULT_PASS: guest
+    healthcheck:
+      test: ["CMD", "rabbitmqctl", "status"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: always
+    networks:
+      market_net:
+        ipv4_address: 172.22.2.2
+
+networks:
+  market_net:
+    external: true

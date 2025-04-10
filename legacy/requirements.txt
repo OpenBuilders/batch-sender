@@ -1,0 +1,8 @@
+tonutils
+tonsdk
+aio_pika
+python-dotenv
+typing_extensions
+fastapi
+uvicorn
+prometheus_client

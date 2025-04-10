@@ -1,0 +1,29 @@
+# This file configures github.com/golangci/golangci-lint.
+
+run:
+  timeout: 20m
+  tests: true
+
+issues:
+  exclude-dirs:
+    - /usr/local/go/
+    - /go/
+
+  exclude-dirs-use-default: true
+
+linters:
+  disable-all: true
+  enable:
+    - goimports
+    - gosimple
+    - govet
+    - ineffassign
+    - misspell
+    - unconvert
+    - typecheck
+    - unused
+    - staticcheck
+    - bidichk
+    - durationcheck
+    - exportloopref
+    - whitespace
