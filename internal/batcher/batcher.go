@@ -11,6 +11,7 @@ import (
 	"github.com/openbuilders/batch-sender/internal/repository/postgres"
 	"github.com/openbuilders/batch-sender/internal/types"
 
+	"github.com/google/uuid"
 	amqp "github.com/rabbitmq/amqp091-go"
 )
 
@@ -22,7 +23,7 @@ type Config struct {
 }
 
 type Batcher struct {
-	Batches   chan types.Batch
+	Batches   chan uuid.UUID
 	config    *Config
 	conn      *amqp.Connection
 	repo      Repository
@@ -33,12 +34,12 @@ type Batcher struct {
 
 type Repository interface {
 	PersistMessage(context.Context, types.SendTONMessage) (int64, error)
-	NextBatch(context.Context, int) (types.Batch, error)
+	NextBatch(context.Context, int) (uuid.UUID, error)
 }
 
 func New(config *Config, conn *amqp.Connection, repo Repository) *Batcher {
 	return &Batcher{
-		Batches: make(chan types.Batch, config.ParallelBatches),
+		Batches: make(chan uuid.UUID, config.ParallelBatches),
 		config:  config,
 		conn:    conn,
 		repo:    repo,
@@ -194,18 +195,19 @@ func (b *Batcher) handleMessage(message amqp.Delivery) (
 	return count, nil
 }
 
-func (b *Batcher) createBatch() (types.Batch, error) {
+func (b *Batcher) createBatch() {
 	ctx, cancel := context.WithTimeout(context.Background(), b.config.DBTimeout)
 	defer cancel()
 
-	batch, err := b.repo.NextBatch(ctx, b.config.BatchSize)
+	batchUUID, err := b.repo.NextBatch(ctx, b.config.BatchSize)
 	if err != nil {
-		return nil, err
+		b.log.Error("next batch error", "error", err)
+		return
 	}
 
-	if len(batch) > 0 {
-		b.log.Debug("Sending new batch")
+	if batchUUID == uuid.Nil {
+		return
 	}
 
-	return batch, nil
+	b.Batches <- batchUUID 
 }

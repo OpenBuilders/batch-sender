@@ -50,12 +50,13 @@ func (p *Postgres) PersistMessage(ctx context.Context, msg types.SendTONMessage)
 	return inserted, nil
 }
 
-func (p *Postgres) NextBatch(ctx context.Context, maxItems int) (
-	types.Batch, error) {
-	p.log.Debug("Building next batch")
+func (p *Postgres) NextBatch(ctx context.Context, maxItems int) (uuid.UUID, error) {
 
 	var batchUUID string
 
+	// atomically get up to maxItems new transactions, mark them as batched
+	// and create a new row in the batch table with all the transaction ids that
+	// were picked for this batch
 	stmt := `
 	WITH batched_transactions AS (
 		SELECT
@@ -64,6 +65,7 @@ func (p *Postgres) NextBatch(ctx context.Context, maxItems int) (
 			transaction
 		WHERE
 			status = 'new'
+		ORDER BY updated_at
 		LIMIT @max_batch_size
 	), updated AS (
 		UPDATE
@@ -90,21 +92,22 @@ func (p *Postgres) NextBatch(ctx context.Context, maxItems int) (
 	SELECT * FROM batch
 	`
 
+	generatedUUID := uuid.New()
+
 	err := p.pg.QueryRow(ctx, stmt, pgx.NamedArgs{
 		"max_batch_size": maxItems,
-		"batch_uuid":     uuid.New().String(),
+		"batch_uuid": generatedUUID.String(),
 	}).Scan(&batchUUID)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			p.log.Debug("No new txs found")
-			return nil, nil
+			return uuid.UUID{}, nil
 		} else {
-			p.log.Error("QueryRow failed: %v", err)
-			return nil, fmt.Errorf("batching error: %w", err)
+			p.log.Error("batch create failed", "error", err)
+			return uuid.UUID{}, fmt.Errorf("batch create error: %w", err)
 		}
 	}
 
-	p.log.Debug("Batch UUID", "batch", batchUUID)
+	p.log.Debug("New batch UUID", "batch", generatedUUID)
 
-	return nil, nil
+	return generatedUUID, nil
 }

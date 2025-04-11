@@ -4,15 +4,15 @@ import (
 	"context"
 	"log/slog"
 
-	"github.com/openbuilders/batch-sender/internal/types"
+	"github.com/google/uuid"
 )
 
 type Sender struct {
-	batches <-chan types.Batch
+	batches <-chan uuid.UUID
 	log     *slog.Logger
 }
 
-func New(batches <-chan types.Batch) *Sender {
+func New(batches <-chan uuid.UUID) *Sender {
 	return &Sender{
 		batches: batches,
 		log:     slog.With("component", "sender"),
