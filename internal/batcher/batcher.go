@@ -32,8 +32,8 @@ type Batcher struct {
 }
 
 type Repository interface {
-	PersistRawTXBatch([]types.Transaction) error
-	PersistTX(context.Context, types.Transaction) ([]types.TXTransfer, error)
+	PersistMessage(context.Context, types.SendTONMessage) (int64, error)
+	NextBatch(context.Context, int) (types.Batch, error)
 }
 
 func New(config *Config, conn *amqp.Connection, repo Repository) *Batcher {
@@ -60,23 +60,7 @@ func (b *Batcher) Run(ctx context.Context) error {
 		return err
 	}
 
-	batch := make([]types.TXTransfer, 0, b.config.BatchSize)
-
-	flush := func() {
-		if len(batch) == 0 {
-			// b.log.Debug("Emtpy batch, skipping")
-			return
-		}
-
-		// TODO(carterqw): when allocations become an issue, use sync.Pool
-		batchCopy := make([]types.TXTransfer, len(batch))
-		copy(batchCopy, batch)
-
-		// go b.processBatch(types.Batch(batchCopy))
-		b.Batches <- batchCopy
-
-		batch = batch[:0]
-	}
+	var unbatched int64
 
 	for {
 		if b.reconnect {
@@ -90,35 +74,32 @@ func (b *Batcher) Run(ctx context.Context) error {
 			b.reconnect = false
 		}
 
-		// TODO(carterqw): read new unprocessed transfers from the db and add
-		// them to the batch
-
 		select {
 		case <-ctx.Done():
 			b.log.Info("Stopping batcher...")
 			return ctx.Err()
 		case msg, ok := <-messages:
 			if !ok {
-				b.log.Debug("Queue is closed, flushing")
-				flush()
+				b.log.Debug("Queue is closed")
 				return fmt.Errorf("queue is closed")
 			}
 
-			transfers, _ := b.handleMessage(msg)
-			for _, transfer := range transfers {
-				batch = append(batch, transfer)
-				if len(batch) >= b.config.BatchSize {
-					b.log.Debug(
-						"Reached the max batch size, processing right away",
-						"max", b.config.BatchSize,
-					)
-					flush()
-				}
+			count, _ := b.handleMessage(msg)
+			unbatched += count
+
+			if unbatched >= int64(b.config.BatchSize) {
+				b.log.Debug(
+					"Reached the max batch size, processing right away",
+					"max", b.config.BatchSize,
+				)
+				b.createBatch()
+				unbatched = 0
 			}
 
 		case <-time.After(b.config.BatchInterval):
 			// b.log.Debug("Batch interval tick")
-			flush()
+			b.createBatch()
+			unbatched = 0
 		}
 	}
 
@@ -155,7 +136,7 @@ func (b *Batcher) restartConsumer() (<-chan amqp.Delivery, error) {
 // handleMessage parses the incoming message and persists in the database,
 // extracting transfers, keeping mapping to the original transaction.
 func (b *Batcher) handleMessage(message amqp.Delivery) (
-	hashes []types.TXTransfer, err error) {
+	msgCount int64, err error) {
 
 	b.log.Debug("Handling incoming message", "msg", message)
 
@@ -173,9 +154,9 @@ func (b *Batcher) handleMessage(message amqp.Delivery) (
 		}
 	}()
 
-	var tx types.Transaction
+	var msg types.SendTONMessage
 
-	err = json.Unmarshal(message.Body, &tx)
+	err = json.Unmarshal(message.Body, &msg)
 	if err != nil {
 		b.log.Error(
 			"tx unmarshalling error",
@@ -183,19 +164,20 @@ func (b *Batcher) handleMessage(message amqp.Delivery) (
 			"error", err,
 		)
 
-		return nil, err
+		return 0, err
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), b.config.DBTimeout)
 	defer cancel()
 
-	transfers, err := b.repo.PersistTX(ctx, tx)
+	count, err := b.repo.PersistMessage(ctx, msg)
 	if err != nil && err != postgres.ErrDuplicateKeyValue {
-		return nil, err
+		b.log.Error("message persistence error", "msg", msg, "error", err)
+		return 0, err
 	}
 
 	if err == postgres.ErrDuplicateKeyValue {
-		b.log.Info("duplicate transfers, skipping", "tx", tx)
+		b.log.Info("duplicate transfers, skipping", "msg", msg)
 	}
 
 	err = message.Ack(false)
@@ -206,8 +188,24 @@ func (b *Batcher) handleMessage(message amqp.Delivery) (
 			"error", err,
 		)
 
+		return 0, err
+	}
+
+	return count, nil
+}
+
+func (b *Batcher) createBatch() (types.Batch, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), b.config.DBTimeout)
+	defer cancel()
+
+	batch, err := b.repo.NextBatch(ctx, b.config.BatchSize)
+	if err != nil {
 		return nil, err
 	}
 
-	return transfers, nil
+	if len(batch) > 0 {
+		b.log.Debug("Sending new batch")
+	}
+
+	return batch, nil
 }
