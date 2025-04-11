@@ -54,6 +54,10 @@ ctags:
 db:
 	PGPASSWORD=dev psql -U postgres -p 5432 -h db -d postgres
 
+#? db: Applies the initial database migration
+migrate:
+	PGPASSWORD=dev psql -U postgres -p 5432 -h db -d postgres < ./migrations/01_initial_schema.sql
+
 #? run: Runs local web server
 run:
 	env BOT_TOKEN=$(BOT_TOKEN) LOG_LEVEL=$(LOG_LEVEL) WEBHOOK_SECRET=sticky-secret ADMINS=999999 USERS=999999 JWT_SIG_KEY=test GOD=IDDQD go run ./cmd/server/main.go

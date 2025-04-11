@@ -10,15 +10,18 @@ import (
 	"time"
 
 	"github.com/openbuilders/batch-sender/internal/batcher"
+	"github.com/openbuilders/batch-sender/internal/queue"
 
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
 // APIHandler is a custom handler type that returns data or an error
-type APIHandler func(w http.ResponseWriter, r *http.Request) (interface{}, error)
+type APIHandler func(w http.ResponseWriter, r *http.Request) (
+	interface{}, error)
 
 type Server struct {
 	config     *Config
+	publisher  *queue.Publisher
 	batcher    *batcher.Batcher
 	httpServer *http.Server
 	ctx        context.Context
@@ -36,11 +39,13 @@ type Config struct {
 	ID           string
 }
 
-func NewServer(config *Config, batcher *batcher.Batcher) *Server {
+func NewServer(config *Config, publisher *queue.Publisher,
+	batcher *batcher.Batcher) *Server {
 	return &Server{
-		config: config,
-		batcher: batcher,
-		log:    slog.With("pod", config.ID, "component", "web-server"),
+		config:    config,
+		publisher: publisher,
+		batcher:   batcher,
+		log:       slog.With("pod", config.ID, "component", "web-server"),
 		httpServer: &http.Server{
 			ReadTimeout:  config.ReadTimeout,
 			WriteTimeout: config.WriteTimeout,
@@ -87,8 +92,8 @@ func (s *Server) Start(ctx context.Context, stop <-chan os.Signal) {
 
 	// The order of middleware calls is up to bottom, first WithCORS is called,
 	// then WithMethod and so on.
-	mux.HandleFunc("/job", WithMethod(
-		WithJSONResponse(s.JobHandler),
+	mux.HandleFunc("/ton/send", WithMethod(
+		WithJSONResponse(s.SendHandler),
 		http.MethodPost,
 	))
 

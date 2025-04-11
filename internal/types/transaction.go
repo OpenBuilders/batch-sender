@@ -6,7 +6,14 @@ type Transfer struct {
 	Comment string  `json:"comment"`
 }
 
-type Transaction struct {
-	TransactionID string     `json:"transaction_id"`
-	Data          []Transfer `json:"data"`
+type TXTransfer struct {
+	Transfer
+	TransactionID string `json:"transaction_id"`
 }
+
+type Transaction struct {
+	ID   string     `json:"transaction_id"`
+	Data []Transfer `json:"data"`
+}
+
+type Batch []TXTransfer

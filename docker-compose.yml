@@ -1,19 +1,5 @@
 version: "3.8"
 services:
-  queue:
-    image: redis:7
-    command: ["redis-server",
-        "--appendonly", "yes",
-        "--save", "60", "1",
-        "--loglevel", "warning"]
-    ports:
-      - "${QUEUE_FORWARD_PORT:-6379}:6379"
-    volumes:
-      - "./data/queue:/data"
-    networks:
-      sticky_net: 
-        ipv4_address: 172.22.2.4
-
   rabbitmq:
     image: rabbitmq:3-management
     container_name: rabbitmq
@@ -32,6 +18,19 @@ services:
     networks:
       market_net:
         ipv4_address: 172.22.2.2
+
+  db:
+    image: postgres:16
+    command: ["postgres"]
+    ports:
+      - "${DB_FORWARD_PORT:-5432}:5432"
+    volumes:
+      - "./data/db:/var/lib/postgresql/data"
+    environment:
+      POSTGRES_PASSWORD: dev
+    networks:
+      market_net:
+        ipv4_address: 172.22.2.4
 
 networks:
   market_net:

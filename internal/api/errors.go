@@ -11,3 +11,7 @@ type APIError struct {
 func (e *APIError) Error() string {
 	return string(e.Code)
 }
+
+const (
+	EnqueueingError APIErrorCode = "enqueueing_error"
+)

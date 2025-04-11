@@ -9,9 +9,10 @@ import (
 	"github.com/openbuilders/batch-sender/internal/types"
 )
 
-func (s *Server) JobHandler(w http.ResponseWriter, r *http.Request) (
+func (s *Server) SendHandler(w http.ResponseWriter, r *http.Request) (
 	interface{}, error) {
-	s.log.Info("Accepted a new job")
+	s.log.Info("Accepted a new transaction")
+
 	bodyBytes, err := ioutil.ReadAll(r.Body)
 	if err != nil {
 		s.log.Error("Unable to read request body", "error", err)
@@ -26,6 +27,18 @@ func (s *Server) JobHandler(w http.ResponseWriter, r *http.Request) (
 		return nil, fmt.Errorf("update unmarshalling error: %w", err)
 	}
 
-	s.log.Info("Transaction", "data", transaction)
+	s.log.Debug("Transaction", "data", transaction)
+
+	err = s.publisher.Publish(bodyBytes)
+	if err != nil {
+		s.log.Error(
+			"couldn't enqueue transaction",
+			"transaction", transaction,
+			"error", err,
+		)
+
+		return nil, &APIError{EnqueueingError}
+	}
+
 	return "ok", nil
 }
