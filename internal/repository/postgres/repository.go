@@ -96,7 +96,7 @@ func (p *Postgres) NextBatch(ctx context.Context, maxItems int) (uuid.UUID, erro
 
 	err := p.pg.QueryRow(ctx, stmt, pgx.NamedArgs{
 		"max_batch_size": maxItems,
-		"batch_uuid": generatedUUID.String(),
+		"batch_uuid":     generatedUUID.String(),
 	}).Scan(&batchUUID)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -110,4 +110,90 @@ func (p *Postgres) NextBatch(ctx context.Context, maxItems int) (uuid.UUID, erro
 	p.log.Debug("New batch UUID", "batch", generatedUUID)
 
 	return generatedUUID, nil
+}
+
+func (p *Postgres) GetNewBatches(ctx context.Context) ([]uuid.UUID, error) {
+	p.log.Debug("Fetching new batches")
+
+	var newBatches []uuid.UUID
+
+	stmt := `SELECT uuid FROM batch WHERE status = 'new' ORDER BY created_at`
+	rows, err := p.pg.Query(ctx, stmt)
+	if err != nil {
+		return nil, fmt.Errorf("couldn't get new batches: %w", err)
+	}
+
+	defer rows.Close()
+
+	for rows.Next() {
+		var id uuid.UUID
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		newBatches = append(newBatches, id)
+	}
+
+	if rows.Err() != nil {
+		return nil, rows.Err()
+	}
+
+	return newBatches, nil
+}
+
+func (p *Postgres) GetBatchTransactions(ctx context.Context, batchUUID uuid.UUID) (
+	[]types.Transaction, error) {
+	p.log.Debug("Fetching batch transactions")
+
+	stmt := `
+	SELECT
+		id, order_id, wallet, amount, comment
+	FROM transaction
+	WHERE id IN (
+		SELECT UNNEST(transaction_ids)
+		FROM batch WHERE uuid = @batch_uuid
+	)
+	ORDER BY id`
+
+	rows, err := p.pg.Query(ctx, stmt, pgx.NamedArgs{
+		"batch_uuid": batchUUID,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("couldn't get new batches: %w", err)
+	}
+
+	defer rows.Close()
+
+	txs, err := pgx.CollectRows(rows, pgx.RowToStructByName[types.Transaction])
+	if err != nil {
+		return nil, fmt.Errorf("parse webhooks with attempts: %w", err)
+	}
+
+	return txs, nil
+}
+
+func (p *Postgres) UpdateBatchStatus(ctx context.Context, batchUUID uuid.UUID,
+	status types.BatchStatus) error {
+	p.log.Debug("Updating batch status", "uuid", batchUUID, "status", status)
+
+	stmt := `
+	UPDATE batch
+	SET status = @status
+	WHERE uuid = @batch_uuid
+	`
+
+	resp, err := p.pg.Exec(ctx, stmt, pgx.NamedArgs{
+		"status":     status,
+		"batch_uuid": batchUUID,
+	})
+	if err != nil {
+		return fmt.Errorf(
+			"updating batch %s status %s error: %w", batchUUID, status, err)
+	}
+
+	if resp.RowsAffected() == 0 {
+		return fmt.Errorf(
+			"updating batch %s status %s: no rows affected", batchUUID, status)
+	}
+
+	return nil
 }

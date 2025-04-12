@@ -88,13 +88,17 @@ func main() {
 	}
 
 	batcher := batcher.New(&batcher.Config{
-		BatchSize:       2,
-		BatchInterval:   1 * time.Second,
+		BatchSize:       20,
+		BatchTimeout:    1 * time.Second,
+		BatchDelay:      10 * time.Millisecond,
 		DBTimeout:       3 * time.Second,
-		ParallelBatches: 1,
+		ParallelBatches: 5,
 	}, rabbitConn, pgClient)
 
-	sender := sender.New(batcher.Batches)
+	sender := sender.New(&sender.Config{
+		NumWorkers: 5,
+		DBTimeout:  3 * time.Second,
+	}, pgClient, batcher.Batches)
 
 	server := api.NewServer(&config, publisher, batcher)
 

@@ -1,10 +1,20 @@
 package types
 
+type BatchStatus string
+
+const (
+	StatusNew     BatchStatus = "new"
+	StatusPending BatchStatus = "pending"
+	StatusSuccess BatchStatus = "success"
+	StatusError   BatchStatus = "error"
+)
+
 type Transaction struct {
-	OrderID string
-	Wallet  string
-	Amount  float64
-	Comment string
+	ID      int64   `db:"id"`
+	OrderID string  `db:"order_id"`
+	Wallet  string  `db:"wallet"`
+	Amount  float64 `db:"amount"`
+	Comment string  `db:"comment"`
 }
 
 type DataItem struct {

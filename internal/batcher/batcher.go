@@ -18,7 +18,8 @@ import (
 type Config struct {
 	BatchSize       int
 	ParallelBatches int
-	BatchInterval   time.Duration
+	BatchTimeout    time.Duration
+	BatchDelay      time.Duration
 	DBTimeout       time.Duration
 }
 
@@ -63,6 +64,8 @@ func (b *Batcher) Run(ctx context.Context) error {
 
 	var unbatched int64
 
+	updateInterval := b.config.BatchTimeout
+
 	for {
 		if b.reconnect {
 			b.log.Debug("Reconnection is needed")
@@ -93,13 +96,23 @@ func (b *Batcher) Run(ctx context.Context) error {
 					"Reached the max batch size, processing right away",
 					"max", b.config.BatchSize,
 				)
-				b.createBatch()
+				created := b.createBatch()
+				if created {
+					updateInterval = b.config.BatchDelay
+				} else {
+					updateInterval = b.config.BatchTimeout
+				}
 				unbatched = 0
 			}
 
-		case <-time.After(b.config.BatchInterval):
+		case <-time.After(updateInterval):
 			// b.log.Debug("Batch interval tick")
-			b.createBatch()
+			created := b.createBatch()
+			if created {
+				updateInterval = b.config.BatchDelay
+			} else {
+				updateInterval = b.config.BatchTimeout
+			}
 			unbatched = 0
 		}
 	}
@@ -195,19 +208,21 @@ func (b *Batcher) handleMessage(message amqp.Delivery) (
 	return count, nil
 }
 
-func (b *Batcher) createBatch() {
+func (b *Batcher) createBatch() bool {
 	ctx, cancel := context.WithTimeout(context.Background(), b.config.DBTimeout)
 	defer cancel()
 
 	batchUUID, err := b.repo.NextBatch(ctx, b.config.BatchSize)
 	if err != nil {
 		b.log.Error("next batch error", "error", err)
-		return
+		return false
 	}
 
 	if batchUUID == uuid.Nil {
-		return
+		return false
 	}
 
-	b.Batches <- batchUUID 
+	b.Batches <- batchUUID
+
+	return true
 }
