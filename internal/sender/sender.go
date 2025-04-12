@@ -16,8 +16,13 @@ type Config struct {
 	DBTimeout  time.Duration
 }
 
+type TransactionSender interface {
+	Send([]types.Transaction) (string, error)
+}
+
 type Sender struct {
 	batches chan uuid.UUID
+	senders []*TransactionSender
 	config  *Config
 	repo    Repository
 	log     *slog.Logger
@@ -29,9 +34,11 @@ type Repository interface {
 	UpdateBatchStatus(context.Context, uuid.UUID, types.BatchStatus) error
 }
 
-func New(config *Config, repo Repository, batches chan uuid.UUID) *Sender {
+func New(config *Config, senders []*TransactionSender, repo Repository,
+	batches chan uuid.UUID) *Sender {
 	return &Sender{
 		batches: batches,
+		senders: senders,
 		config:  config,
 		repo:    repo,
 		log:     slog.With("component", "sender"),

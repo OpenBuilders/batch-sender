@@ -33,6 +33,7 @@ func main() {
 	metricsPort := env.GetInt("METRICS_PORT", 9091)
 	rabbitURL := env.GetString("RABBIT_URL", "amqp://guest:guest@rabbitmq:5672/")
 	postgresURL := env.GetString("POSTGRES_URL", "postgres://postgres:dev@db:5432/postgres?connect_timeout=1")
+	lightClientConfig := env.GetString("LIGHTCLIENT_CONFIG", "https://ton-blockchain.github.io/testnet-global.config.json")
 
 	slog.Info("Connecting to RabbitMQ...")
 
@@ -95,9 +96,22 @@ func main() {
 		ParallelBatches: 5,
 	}, rabbitConn, pgClient)
 
+	client := liteclient.NewConnectionPool()
+
+	// connect to testnet lite server
+	configUrl := "https://ton-blockchain.github.io/testnet-global.config.json"
+	err := client.AddConnectionsFromConfigUrl(context.Background(), configUrl)
+	if err != nil {
+		panic(err)
+	}
+
+	api := ton.NewAPIClient(client, ton.ProofCheckPolicyFast).WithRetry()
+
 	sender := sender.New(&sender.Config{
 		NumWorkers: 5,
 		DBTimeout:  3 * time.Second,
+	}, []*sender.TransactionSender{
+		sender.NewLightClientSender(lightclientAPI),
 	}, pgClient, batcher.Batches)
 
 	server := api.NewServer(&config, publisher, batcher)
