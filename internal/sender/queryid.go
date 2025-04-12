@@ -21,6 +21,20 @@ func NewHighloadQueryID() *HighloadQueryID {
 	}
 }
 
+// FromShiftAndBitNumber safely creates a new HighloadQueryID
+func FromShiftAndBitNumber(shift, bitnumber uint64) *HighloadQueryID {
+	if shift < 0 || shift > MAX_SHIFT {
+		panic(errors.New("invalid shift: must be in [0, 8191]"))
+	}
+	if bitnumber < 0 || bitnumber > MAX_BIT_NUMBER {
+		panic(errors.New("invalid bitnumber: must be in [0, 1022]"))
+	}
+	return &HighloadQueryID{
+		shift:     shift,
+		bitnumber: bitnumber,
+	}
+}
+
 func (h *HighloadQueryID) GetNext() (*HighloadQueryID, error) {
 	newBitnumber := h.bitnumber + 1
 	newShift := h.shift
@@ -37,10 +51,7 @@ func (h *HighloadQueryID) GetNext() (*HighloadQueryID, error) {
 		}
 	}
 
-	return &HighloadQueryID{
-		shift:     newShift,
-		bitnumber: newBitnumber,
-	}, nil
+	return FromShiftAndBitNumber(newShift, newBitnumber), nil
 }
 
 func (h *HighloadQueryID) HasNext() bool {
@@ -61,39 +72,16 @@ func (h *HighloadQueryID) GetQueryID() uint64 {
 
 func FromQueryID(queryID uint64) (*HighloadQueryID, error) {
 	shift := queryID >> BIT_NUMBER_SIZE
-	bitnumber := queryID & MAX_BIT_NUMBER
-	if bitnumber > MAX_BIT_NUMBER {
-		return nil, errors.New("invalid queryID format")
-	}
-	return &HighloadQueryID{
-		shift:     shift,
-		bitnumber: bitnumber,
-	}, nil
+	bitnumber := queryID & 1023
+	return FromShiftAndBitNumber(shift, bitnumber), nil
 }
 
 func FromSeqno(seqno uint64) *HighloadQueryID {
-	shift := seqno / MAX_BIT_NUMBER
-	bitnumber := seqno % MAX_BIT_NUMBER
-	return &HighloadQueryID{
-		shift:     shift,
-		bitnumber: bitnumber,
-	}
-}
-
-// FromShiftAndBitNumber safely creates a new HighloadQueryID
-func FromShiftAndBitNumber(shift, bitnumber uint64) *HighloadQueryID {
-	if shift < 0 || shift > MAX_SHIFT {
-		panic(errors.New("invalid shift: must be in [0, 8191]"))
-	}
-	if bitnumber < 0 || bitnumber > MAX_BIT_NUMBER {
-		panic(errors.New("invalid bitnumber: must be in [0, 1022]"))
-	}
-	return &HighloadQueryID{
-		shift:     shift,
-		bitnumber: bitnumber,
-	}
+	shift := seqno / 1023
+	bitnumber := seqno % 1023
+	return FromShiftAndBitNumber(shift, bitnumber)
 }
 
 func (h *HighloadQueryID) ToSeqno() uint64 {
-	return h.bitnumber + h.shift*MAX_BIT_NUMBER
+	return h.bitnumber + h.shift*1023
 }

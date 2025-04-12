@@ -17,12 +17,12 @@ type Config struct {
 }
 
 type TransactionSender interface {
-	Send([]types.Transaction) (string, error)
+	Send(context.Context, []types.Transaction) (string, error)
 }
 
 type Sender struct {
 	batches chan uuid.UUID
-	senders []*TransactionSender
+	senders []TransactionSender
 	config  *Config
 	repo    Repository
 	log     *slog.Logger
@@ -34,7 +34,7 @@ type Repository interface {
 	UpdateBatchStatus(context.Context, uuid.UUID, types.BatchStatus) error
 }
 
-func New(config *Config, senders []*TransactionSender, repo Repository,
+func New(config *Config, senders []TransactionSender, repo Repository,
 	batches chan uuid.UUID) *Sender {
 	return &Sender{
 		batches: batches,
@@ -95,9 +95,17 @@ func (s *Sender) worker(ctx context.Context, id int, batches <-chan uuid.UUID,
 
 			s.log.Debug("Got batch txs", "txs", txs)
 			// TODO(carterqw): emulates sending, remove
-			time.Sleep(1 * time.Second)
+			sender := s.senders[0]
+			txHash, err := sender.Send(ctxWithTimeout, txs)
+			if err != nil {
+				s.log.Error("sending txs failed", "txs", txs, "error", err)
+				//TODO(carterqw): handle errors
+				continue
+			}
 
-			err = s.repo.UpdateBatchStatus(ctxWithTimeout, batchUUID, types.StatusPending)
+			s.log.Debug("Got tx hash", "hash", txHash)
+
+			err = s.repo.UpdateBatchStatus(context.Background(), batchUUID, types.StatusPending)
 			if err != nil {
 				s.log.Error("couldn't update batch")
 				continue

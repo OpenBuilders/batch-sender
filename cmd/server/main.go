@@ -21,6 +21,8 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	amqp "github.com/rabbitmq/amqp091-go"
+	"github.com/xssnick/tonutils-go/liteclient"
+	"github.com/xssnick/tonutils-go/ton"
 	"golang.org/x/sync/errgroup"
 )
 
@@ -34,6 +36,7 @@ func main() {
 	rabbitURL := env.GetString("RABBIT_URL", "amqp://guest:guest@rabbitmq:5672/")
 	postgresURL := env.GetString("POSTGRES_URL", "postgres://postgres:dev@db:5432/postgres?connect_timeout=1")
 	lightClientConfig := env.GetString("LIGHTCLIENT_CONFIG", "https://ton-blockchain.github.io/testnet-global.config.json")
+	mnemonic := env.GetString("MNEMONIC", "")
 
 	slog.Info("Connecting to RabbitMQ...")
 
@@ -99,19 +102,22 @@ func main() {
 	client := liteclient.NewConnectionPool()
 
 	// connect to testnet lite server
-	configUrl := "https://ton-blockchain.github.io/testnet-global.config.json"
-	err := client.AddConnectionsFromConfigUrl(context.Background(), configUrl)
+	err = client.AddConnectionsFromConfigUrl(context.Background(), lightClientConfig)
 	if err != nil {
-		panic(err)
+		slog.Error("couldn't add connection to lite client", "error", err)
+		return
 	}
 
-	api := ton.NewAPIClient(client, ton.ProofCheckPolicyFast).WithRetry()
+	lightclientAPI := ton.NewAPIClient(client, ton.ProofCheckPolicyFast).WithRetry()
+	// lightclientAPI.SetTrustedBlockFromConfig(cfg)
 
 	sender := sender.New(&sender.Config{
 		NumWorkers: 5,
 		DBTimeout:  3 * time.Second,
-	}, []*sender.TransactionSender{
-		sender.NewLightClientSender(lightclientAPI),
+	}, []sender.TransactionSender{
+		sender.NewLightClientSender(&sender.LightClientSenderConfig{
+			Mnemonic: mnemonic,
+		}, lightclientAPI),
 	}, pgClient, batcher.Batches)
 
 	server := api.NewServer(&config, publisher, batcher)

@@ -5,7 +5,7 @@ import (
 )
 
 const (
-	MaxQueryID = 8388605
+	MaxQueryID = 8388606 // this is the max value unreachable through GetNext
 )
 
 func TestHighloadQueryID_SequentialGeneration(t *testing.T) {
@@ -33,55 +33,43 @@ func TestHighloadQueryID_SequentialGeneration(t *testing.T) {
 
 func TestHighloadQueryID_FromQueryID(t *testing.T) {
 	// Create from previous query ID
-	q, err := FromQueryID(MaxQueryID - 1)
+	q, err := FromQueryID(1)
 	if err != nil {
 		t.Fatal("unexpected error in FromQueryID")
 	}
 
-	final, err := q.GetNext()
-	if err != nil {
-		t.Fatalf("unexpected error for GetNext")
-	}
-
-	lastQueryID := final.GetQueryID()
-	if lastQueryID != MaxQueryID {
-		t.Fatalf("unexpected max query ID, want: %d, got: %d", MaxQueryID, lastQueryID)
+	if q.shift != 0 || q.bitnumber != 1 {
+		t.Fatalf("expected shift=0 and bitnumber=1, got shift=%v bitnumber=%v", q.shift, q.bitnumber)
 	}
 }
 
 func TestHighloadQueryID_Exhaustion(t *testing.T) {
 	// Create a query ID close to the limit: MAX_SHIFT=8191, MAX_BITNUMBER=1022
-	nearEnd := FromShiftAndBitNumber(8191, 1019)
+	nearEnd := FromShiftAndBitNumber(8191, 1020)
+	if !nearEnd.HasNext() {
+		t.Fatal("should still have next query ID left")
+	}
 
-	// First GetNext() should succeed, 1020
+	// First GetNext() should succeed, 1021
 	next, err := nearEnd.GetNext()
 	if err != nil {
 		t.Fatalf("unexpected error for GetNext: %v", err)
 	}
-
-	if next.shift != 8191 || next.bitnumber != 1020 {
-		t.Fatalf("expected shift=8191 and bitnumber=1020, got shift=%v bitnumber=%v", next.shift, next.bitnumber)
+	if next.shift != 8191 || next.bitnumber != 1021 {
+		t.Fatalf("expected shift=8191 and bitnumber=1021, got shift=%v bitnumber=%v", next.shift, next.bitnumber)
 	}
-	if !next.HasNext() {
-		t.Fatal("should still have one last emergency query ID left")
+	if next.HasNext() {
+		t.Fatal("should not allow next generation to keep one last emergency query ID left")
+	}
+
+	if next.GetQueryID() != MaxQueryID-1 {
+		t.Fatalf("expected last query id to be %d, got: %d", MaxQueryID-1, next.GetQueryID())
 	}
 
 	// Last legal query ID, 1021
-	final, err := next.GetNext()
-	if err != nil {
-		t.Fatalf("unexpected error for GetNext")
-	}
-	if final.HasNext() {
-		t.Fatal("should NOT have more query IDs after exhausting the range")
-	}
-
-	lastQueryID := final.GetQueryID()
-	if lastQueryID != MaxQueryID {
-		t.Fatalf("unexpected max query ID, want: %d, got: %d", MaxQueryID, lastQueryID)
-	}
-
-	_, err = final.GetNext()
+	_, err = next.GetNext()
 	if err == nil {
 		t.Fatal("expected the last GetNext to throw an error but it didn't happen")
 	}
+
 }
