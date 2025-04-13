@@ -33,10 +33,14 @@ func main() {
 	listenPort := env.GetInt("LISTEN_PORT", 8090)
 	probesPort := env.GetInt("PROBES_PORT", 8081)
 	metricsPort := env.GetInt("METRICS_PORT", 9091)
-	rabbitURL := env.GetString("RABBIT_URL", "amqp://guest:guest@rabbitmq:5672/")
-	postgresURL := env.GetString("POSTGRES_URL", "postgres://postgres:dev@db:5432/postgres?connect_timeout=1")
-	lightClientConfig := env.GetString("LIGHTCLIENT_CONFIG", "https://ton-blockchain.github.io/testnet-global.config.json")
+	rabbitURL := env.GetString("RABBIT_URL",
+		"amqp://guest:guest@rabbitmq:5672/")
+	postgresURL := env.GetString("POSTGRES_URL",
+		"postgres://postgres:dev@db:5432/postgres?connect_timeout=1")
+	lightClientConfig := env.GetString("LIGHTCLIENT_CONFIG",
+		"https://ton-blockchain.github.io/testnet-global.config.json")
 	mnemonic := env.GetString("MNEMONIC", "")
+	isTestnet := env.GetBool("IS_TESTNET", true)
 
 	slog.Info("Connecting to RabbitMQ...")
 
@@ -112,13 +116,12 @@ func main() {
 	// lightclientAPI.SetTrustedBlockFromConfig(cfg)
 
 	sender := sender.New(&sender.Config{
-		NumWorkers: 5,
-		DBTimeout:  3 * time.Second,
-	}, []sender.TransactionSender{
-		sender.NewLightClientSender(&sender.LightClientSenderConfig{
-			Mnemonic: mnemonic,
-		}, lightclientAPI),
-	}, pgClient, batcher.Batches)
+		NumWorkers:  5,
+		NumRetries:  5,
+		SendTimeout: 10 * time.Second,
+		DBTimeout:   3 * time.Second,
+		MessageTTL:  1 * time.Hour,
+	}, lightclientAPI, mnemonic, isTestnet, pgClient, batcher.Batches)
 
 	server := api.NewServer(&config, publisher, batcher)
 

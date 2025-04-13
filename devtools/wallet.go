@@ -31,12 +31,16 @@ func main() {
 	api := ton.NewAPIClient(client, ton.ProofCheckPolicyFast).WithRetry()
 	api.SetTrustedBlockFromConfig(cfg)
 
-	words := strings.Split("crane flavor south loyal volcano tribe shock nerve space account broken movie stomach salt catch script blush excuse draw lava square oyster tragic display", " ")
+	// mnemonic := "crane flavor south loyal volcano tribe shock nerve space account broken movie stomach salt catch script blush excuse draw lava square oyster tragic display"
+
 	// wallet address: UQDIEc1Xfx5drYSUAO3vUoJucXaqthaSDpzxBtR6lV1fVyia
 	// testnet address: 0QDIEc1Xfx5drYSUAO3vUoJucXaqthaSDpzxBtR6lV1fV5MQ
 
+	seed := wallet.NewSeed()
+	log.Println("New seed:", strings.Join(seed, " "))
+
 	// initialize high-load wallet
-	w, err := wallet.FromSeed(api, words, wallet.ConfigHighloadV3{
+	w, err := wallet.FromSeed(api, seed, wallet.ConfigHighloadV3{
 		MessageTTL: 60 * 5,
 		MessageBuilder: func(ctx context.Context, subWalletId uint32) (id uint32, createdAt int64, err error) {
 			return 0, 0, nil
@@ -48,7 +52,7 @@ func main() {
 		return
 	}
 
-	log.Println("wallet address:", w.WalletAddress())
+	log.Println("testnet wallet address:", w.WalletAddress().Testnet(true))
 
 	block, err := api.CurrentMasterchainInfo(context.Background())
 	if err != nil {

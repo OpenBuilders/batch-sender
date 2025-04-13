@@ -1,5 +1,11 @@
 package types
 
+import (
+	"math"
+
+	"github.com/google/uuid"
+)
+
 type BatchStatus string
 
 const (
@@ -9,7 +15,7 @@ const (
 	StatusError   BatchStatus = "error"
 )
 
-type Transaction struct {
+type Transfer struct {
 	ID      int64   `db:"id"`
 	OrderID string  `db:"order_id"`
 	Wallet  string  `db:"wallet"`
@@ -28,4 +34,17 @@ type SendTONMessage struct {
 	Data          []DataItem `json:"data"`
 }
 
-type Batch []Transaction
+type Batch struct {
+	UUID      uuid.UUID
+	Transfers []Transfer
+}
+
+func (b *Batch) GetTotalNano() uint64 {
+	total := uint64(0)
+
+	for _, tr := range b.Transfers {
+		total += uint64(tr.Amount * math.Pow(10, 9))
+	}
+
+	return total
+}

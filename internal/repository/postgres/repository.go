@@ -31,7 +31,7 @@ func (p *Postgres) PersistMessage(ctx context.Context, msg types.SendTONMessage)
 	}
 
 	p.log.Debug("COPY", "fields", fields, "rows", rows)
-	inserted, err := p.pg.CopyFrom(ctx, pgx.Identifier{"transaction"}, fields,
+	inserted, err := p.pg.CopyFrom(ctx, pgx.Identifier{"transfer"}, fields,
 		pgx.CopyFromRows(rows))
 	if err != nil {
 		if pgErr, ok := err.(*pgconn.PgError); ok {
@@ -58,21 +58,21 @@ func (p *Postgres) NextBatch(ctx context.Context, maxItems int) (uuid.UUID, erro
 	// and create a new row in the batch table with all the transaction ids that
 	// were picked for this batch
 	stmt := `
-	WITH batched_transactions AS (
+	WITH batched_transfers AS (
 		SELECT
 			id, order_id, wallet, amount, "comment"
 		FROM
-			transaction
+			transfer
 		WHERE
 			status = 'new'
 		ORDER BY updated_at
 		LIMIT @max_batch_size
 	), updated AS (
 		UPDATE
-			transaction t
+			transfer t
 		SET
 			status = 'batched', updated_at = NOW()
-		FROM batched_transactions b
+		FROM batched_transfers b
 		WHERE
 			t.order_id = b.order_id AND
 			t.wallet = b.wallet AND
@@ -80,11 +80,11 @@ func (p *Postgres) NextBatch(ctx context.Context, maxItems int) (uuid.UUID, erro
 			t.comment = b.comment
 		RETURNING t.id
 	), batch_tx_ids AS (
-		SELECT @batch_uuid::uuid as uuid, ARRAY_AGG(id) as transaction_ids
+		SELECT @batch_uuid::uuid as uuid, ARRAY_AGG(id) as transfer_ids
 		FROM updated
 	), batch AS (
-		INSERT INTO batch (uuid, transaction_ids)
-		SELECT uuid, transaction_ids
+		INSERT INTO batch (uuid, transfer_ids)
+		SELECT uuid, transfer_ids
 		FROM batch_tx_ids
 		WHERE EXISTS (SELECT 1 FROM updated)
 		RETURNING uuid
@@ -140,16 +140,16 @@ func (p *Postgres) GetNewBatches(ctx context.Context) ([]uuid.UUID, error) {
 	return newBatches, nil
 }
 
-func (p *Postgres) GetBatchTransactions(ctx context.Context, batchUUID uuid.UUID) (
-	[]types.Transaction, error) {
-	p.log.Debug("Fetching batch transactions")
+func (p *Postgres) GetTransfersBatch(ctx context.Context, batchUUID uuid.UUID) (
+	*types.Batch, error) {
+	p.log.Debug("Fetching batch transfers")
 
 	stmt := `
 	SELECT
 		id, order_id, wallet, amount, comment
-	FROM transaction
+	FROM transfer
 	WHERE id IN (
-		SELECT UNNEST(transaction_ids)
+		SELECT UNNEST(transfer_ids)
 		FROM batch WHERE uuid = @batch_uuid
 	)
 	ORDER BY id`
@@ -163,12 +163,15 @@ func (p *Postgres) GetBatchTransactions(ctx context.Context, batchUUID uuid.UUID
 
 	defer rows.Close()
 
-	txs, err := pgx.CollectRows(rows, pgx.RowToStructByName[types.Transaction])
+	transfers, err := pgx.CollectRows(rows, pgx.RowToStructByName[types.Transfer])
 	if err != nil {
-		return nil, fmt.Errorf("parse webhooks with attempts: %w", err)
+		return nil, fmt.Errorf("transfers parsing error: %w", err)
 	}
 
-	return txs, nil
+	return &types.Batch{
+		UUID:      batchUUID,
+		Transfers: transfers,
+	}, nil
 }
 
 func (p *Postgres) UpdateBatchStatus(ctx context.Context, batchUUID uuid.UUID,
@@ -193,6 +196,64 @@ func (p *Postgres) UpdateBatchStatus(ctx context.Context, batchUUID uuid.UUID,
 	if resp.RowsAffected() == 0 {
 		return fmt.Errorf(
 			"updating batch %s status %s: no rows affected", batchUUID, status)
+	}
+
+	return nil
+}
+
+func (p *Postgres) GetLastQueryID(ctx context.Context, walletHash string) (
+	uint64, error) {
+	p.log.Debug("Fetching last query id")
+
+	var queryID int64
+
+	stmt := `
+	SELECT query_id
+	FROM transaction
+	WHERE wallet_hash = @wallet_hash
+	ORDER BY created_at DESC
+	LIMIT 1
+	`
+
+	err := p.pg.QueryRow(ctx, stmt, pgx.NamedArgs{
+		"wallet_hash": walletHash,
+	}).Scan(&queryID)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return 0, nil
+		} else {
+			p.log.Error(
+				"fetching last query id failed",
+				"wallet", walletHash,
+				"error", err,
+			)
+			return 0, fmt.Errorf("GetLastID error: %w", err)
+		}
+	}
+
+	return uint64(queryID), nil
+
+}
+
+func (p *Postgres) PersistWallet(ctx context.Context, hash, mainnetAddress,
+	testnetAddress string) error {
+	p.log.Debug("Persisting wallet", "hash", hash)
+
+	stmt := `
+	INSERT INTO wallet (hash, mainnet_address, testnet_address)
+	VALUES (@hash, @mainnet_address, @testnet_address)
+	ON CONFLICT (hash)
+	DO NOTHING
+	`
+
+	_, err := p.pg.Exec(ctx, stmt, pgx.NamedArgs{
+		"hash":            hash,
+		"mainnet_address": mainnetAddress,
+		"testnet_address": testnetAddress,
+	})
+	if err != nil {
+		return fmt.Errorf(
+			"inserting wallet %s error: %w", hash, err)
 	}
 
 	return nil

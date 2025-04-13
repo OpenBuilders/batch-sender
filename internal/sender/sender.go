@@ -2,51 +2,72 @@ package sender
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"sync"
 	"time"
 
+	"github.com/openbuilders/batch-sender/internal/helpers"
 	"github.com/openbuilders/batch-sender/internal/types"
 
 	"github.com/google/uuid"
+	"github.com/xssnick/tonutils-go/ton"
 )
 
 type Config struct {
-	NumWorkers int64
-	DBTimeout  time.Duration
+	NumWorkers  int64
+	NumRetries  int64
+	SendTimeout time.Duration
+	DBTimeout   time.Duration
+	MessageTTL  time.Duration
 }
 
+type MessageBuilderFunc func(context.Context, uint32) (uint32, int64, error)
+
 type TransactionSender interface {
-	Send(context.Context, []types.Transaction) (string, error)
+	Send(context.Context, []types.Transfer) (string, error)
 }
 
 type Sender struct {
-	batches chan uuid.UUID
-	senders []TransactionSender
-	config  *Config
-	repo    Repository
-	log     *slog.Logger
+	batches   chan uuid.UUID
+	client    ton.APIClientWrapped
+	mnemonic  string
+	isTestnet bool
+	config    *Config
+	wallet    *Wallet
+	repo      Repository
+	log       *slog.Logger
 }
 
 type Repository interface {
 	GetNewBatches(context.Context) ([]uuid.UUID, error)
-	GetBatchTransactions(context.Context, uuid.UUID) ([]types.Transaction, error)
+	GetTransfersBatch(context.Context, uuid.UUID) (*types.Batch, error)
 	UpdateBatchStatus(context.Context, uuid.UUID, types.BatchStatus) error
+	GetLastQueryID(context.Context, string) (uint64, error)
+	PersistWallet(context.Context, string, string, string) error
 }
 
-func New(config *Config, senders []TransactionSender, repo Repository,
-	batches chan uuid.UUID) *Sender {
+func New(config *Config, client ton.APIClientWrapped, mnemonic string,
+	isTestnet bool, repo Repository, batches chan uuid.UUID) *Sender {
 	return &Sender{
-		batches: batches,
-		senders: senders,
-		config:  config,
-		repo:    repo,
-		log:     slog.With("component", "sender"),
+		batches:   batches,
+		client:    client,
+		mnemonic:  mnemonic,
+		isTestnet: isTestnet,
+		config:    config,
+		repo:      repo,
+		log:       slog.With("component", "sender"),
 	}
 }
 
 func (s *Sender) Run(ctx context.Context) error {
 	s.log.Info("Starting sender")
+
+	err := s.initWallet(ctx)
+	if err != nil {
+		s.log.Error("couldn't initialize wallet", "error", err)
+		return err
+	}
 
 	go s.backfillFromDB()
 
@@ -58,6 +79,61 @@ func (s *Sender) Run(ctx context.Context) error {
 
 	wg.Wait()
 	s.log.Info("Stopped sender")
+
+	return nil
+}
+
+func (s *Sender) initWallet(ctx context.Context) error {
+	hash := helpers.TinyHash(s.mnemonic)
+	s.log.Debug("Mnemonic hash", "hash", hash)
+
+	ctxWithTimeout, cancel := context.WithTimeout(ctx, s.config.DBTimeout)
+	defer cancel()
+
+	lastQueryID, err := s.repo.GetLastQueryID(ctxWithTimeout, hash)
+	if err != nil {
+		s.log.Error(
+			"couldn't fetch last query ID",
+			"wallet", hash,
+			"error", err,
+		)
+		return err
+	}
+
+	s.log.Debug("last query ID", "wallet", hash, "lastQueryID", lastQueryID)
+
+	highloadQueryID, err := FromQueryID(lastQueryID)
+	if err != nil {
+		return fmt.Errorf("couldn't create highload query ID: %w", err)
+	}
+
+	// initialize high-load wallet
+	wallet := NewWallet(s.client, s.mnemonic, s.isTestnet, highloadQueryID)
+	err = wallet.Init()
+	if err != nil {
+		return fmt.Errorf("couldn't create wallet: %w", err)
+	}
+
+	address, err := wallet.GetAddress()
+	if err != nil {
+		return fmt.Errorf("get address error: %w", err)
+	}
+
+	s.log.Debug("Wallet address", "address", address)
+
+	ctxWithTimeout, cancel = context.WithTimeout(ctx, s.config.DBTimeout)
+	defer cancel()
+
+	err = s.repo.PersistWallet(
+		ctxWithTimeout, hash,
+		address.Testnet(false).String(),
+		address.Testnet(true).String(),
+	)
+	if err != nil {
+		return fmt.Errorf("wallet persistence error: %w", err)
+	}
+
+	s.wallet = wallet
 
 	return nil
 }
@@ -83,7 +159,7 @@ func (s *Sender) worker(ctx context.Context, id int, batches <-chan uuid.UUID,
 			ctxWithTimeout, cancel := context.WithTimeout(ctx, s.config.DBTimeout)
 			defer cancel()
 
-			txs, err := s.repo.GetBatchTransactions(ctxWithTimeout, batchUUID)
+			batch, err := s.repo.GetTransfersBatch(ctxWithTimeout, batchUUID)
 			if err != nil {
 				s.log.Error(
 					"couldn't get batch txs",
@@ -93,23 +169,32 @@ func (s *Sender) worker(ctx context.Context, id int, batches <-chan uuid.UUID,
 				continue
 			}
 
-			s.log.Debug("Got batch txs", "txs", txs)
-			// TODO(carterqw): emulates sending, remove
-			sender := s.senders[0]
-			txHash, err := sender.Send(ctxWithTimeout, txs)
+			s.log.Debug("Got transfers batch", "batch", batch)
+
+			result, err := s.wallet.Send(ctx, batch, s.config.NumRetries, s.config.SendTimeout)
 			if err != nil {
-				s.log.Error("sending txs failed", "txs", txs, "error", err)
+				s.log.Error(
+					"sending tx failed",
+					"batch", batch,
+					"error", err,
+				)
 				//TODO(carterqw): handle errors
 				continue
 			}
 
-			s.log.Debug("Got tx hash", "hash", txHash)
+			s.log.Debug("Got tx result", "result", result)
 
-			err = s.repo.UpdateBatchStatus(context.Background(), batchUUID, types.StatusPending)
+			ctxWithTimeout, cancel = context.WithTimeout(ctx, s.config.DBTimeout)
+			defer cancel()
+
+			//err = s.repo.PersistTransaction(ctxWithTimeout, result)
+			//if err
+
+			/* err = s.repo.UpdateBatchStatus(context.Background(), batchUUID, types.StatusPending)
 			if err != nil {
 				s.log.Error("couldn't update batch")
 				continue
-			}
+			}*/
 		}
 	}
 }

@@ -20,20 +20,20 @@ func (s *Server) SendHandler(w http.ResponseWriter, r *http.Request) (
 	}
 	defer r.Body.Close()
 
-	var transaction types.Transaction
+	var message types.SendTONMessage
 
-	err = json.Unmarshal(bodyBytes, &transaction)
+	err = json.Unmarshal(bodyBytes, &message)
 	if err != nil {
-		return nil, fmt.Errorf("update unmarshalling error: %w", err)
+		return nil, fmt.Errorf("message unmarshalling error: %w", err)
 	}
 
-	s.log.Debug("Transaction", "data", transaction)
+	s.log.Debug("Message", "data", message)
 
 	err = s.publisher.Publish(bodyBytes)
 	if err != nil {
 		s.log.Error(
-			"couldn't enqueue transaction",
-			"transaction", transaction,
+			"couldn't enqueue message",
+			"message", message,
 			"error", err,
 		)
 

@@ -1,6 +1,6 @@
 GO_FILES=$(shell find . \( -path "./.go_pkg_cache" -o -path "./data" \) -prune -o -name "*.go" -print)
 
-.PHONY: dev fmt help lint shell test build release stage tag run run-cron
+.PHONY: fmt lint dev shell test build ctags db schema run help
 
 LOG_LEVEL ?= "INFO"
 COIN_GECKO_KEY ?= ""
@@ -29,23 +29,6 @@ test:
 build:
 	env CGO_ENABLED=0 go build -o ./build/bin/server -ldflags '-s' ./cmd/server/main.go
 
-#? release: Builds a Docker image with the app and pushes it to the registry.
-release:
-	$(MAKE) tag TAG=latest
-
-#? stage: Builds a Docker image with the app and pushes it to the registry.
-stage:
-	$(MAKE) tag TAG=staging
-
-tag:
-	@if [ -z "$(TAG)" ]; then \
-		$(MAKE) tag TAG=staging; \
-	else \
-		docker build -t stickers:latest --build-arg NAME=stickersapp -f ./dockerfiles/app/Dockerfile . && \
-		docker tag stickers:latest registry.digitalocean.com/dog-registry/stickers-server:$(TAG) && \
-		docker push registry.digitalocean.com/dog-registry/stickers-server:$(TAG); \
-	fi
-
 #? ctags: Generates tags for golang files
 ctags:
 	ctags -R ${GO_FILES}
@@ -54,17 +37,14 @@ ctags:
 db:
 	PGPASSWORD=dev psql -U postgres -p 5432 -h db -d postgres
 
-#? db: Applies the initial database migration
-migrate:
-	PGPASSWORD=dev psql -U postgres -p 5432 -h db -d postgres < ./migrations/01_initial_schema.sql
+#? db: Creates the database schema
+schema:
+	PGPASSWORD=dev psql -U postgres -p 5432 -h db -d postgres < ./schema/01_initial_schema.sql
 
 #? run: Runs local web server
 run:
-	env BOT_TOKEN=$(BOT_TOKEN) LOG_LEVEL=$(LOG_LEVEL) WEBHOOK_SECRET=sticky-secret ADMINS=999999 USERS=999999 JWT_SIG_KEY=test GOD=IDDQD go run ./cmd/server/main.go
+	env LOG_LEVEL=$(LOG_LEVEL)  go run ./cmd/server/main.go
 
-#? run-cron: Runs the fetchers
-run-cron:
-	env COIN_GECKO_KEY=$(COIN_GECKO_KEY) LOG_LEVEL=$(LOG_LEVEL) go run ./cmd/crons/main.go
 
 #? help: Get more info on make commands.
 help: Makefile
