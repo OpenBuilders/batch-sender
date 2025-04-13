@@ -100,6 +100,8 @@ func (s *Sender) initWallet(ctx context.Context) error {
 		return err
 	}
 
+	lastQueryID = 3
+
 	s.log.Debug("last query ID", "wallet", hash, "lastQueryID", lastQueryID)
 
 	highloadQueryID, err := FromQueryID(lastQueryID)
@@ -158,6 +160,13 @@ func (s *Sender) worker(ctx context.Context, id int, batches <-chan uuid.UUID,
 
 			ctxWithTimeout, cancel := context.WithTimeout(ctx, s.config.DBTimeout)
 			defer cancel()
+
+			// TODO:
+			// [ ] move generation of the queryiD to the sender
+			// [ ] add queryID parameter to send
+			// [ ] before sending a batch, generate queryID, store TX in the
+			//     unknown status
+			// [ ] timeout management - parameters are setup on wallet creation
 
 			batch, err := s.repo.GetTransfersBatch(ctxWithTimeout, batchUUID)
 			if err != nil {

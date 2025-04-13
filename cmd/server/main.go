@@ -38,7 +38,7 @@ func main() {
 	postgresURL := env.GetString("POSTGRES_URL",
 		"postgres://postgres:dev@db:5432/postgres?connect_timeout=1")
 	lightClientConfig := env.GetString("LIGHTCLIENT_CONFIG",
-		"https://ton-blockchain.github.io/testnet-global.config.json")
+		"https://ton.org/testnet-global.config.json")
 	mnemonic := env.GetString("MNEMONIC", "")
 	isTestnet := env.GetBool("IS_TESTNET", true)
 
@@ -113,7 +113,6 @@ func main() {
 	}
 
 	lightclientAPI := ton.NewAPIClient(client, ton.ProofCheckPolicyFast).WithRetry()
-	// lightclientAPI.SetTrustedBlockFromConfig(cfg)
 
 	sender := sender.New(&sender.Config{
 		NumWorkers:  5,

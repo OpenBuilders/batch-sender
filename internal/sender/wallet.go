@@ -17,6 +17,7 @@ import (
 	"github.com/xssnick/tonutils-go/tlb"
 	"github.com/xssnick/tonutils-go/ton"
 	"github.com/xssnick/tonutils-go/ton/wallet"
+	"github.com/xssnick/tonutils-go/tvm/cell"
 )
 
 type Wallet struct {
@@ -104,27 +105,37 @@ func (w *Wallet) Send(ctx context.Context, batch *types.Batch, retries int64, ti
 	if balance.Nano().Uint64() >= 3000000+batch.GetTotalNano() {
 		var messages []*wallet.Message
 		for _, transfer := range batch.Transfers {
-			// create comment cell to send in body of each message
-			comment, err := wallet.CreateCommentCell(transfer.Comment)
-			if err != nil {
-				w.log.Error("CreateComment error", "error", err)
-				return nil, fmt.Errorf("couldn't create comment: %w", err)
-			}
-
 			addr := address.MustParseAddr(transfer.Wallet)
-
-			messages = append(messages, &wallet.Message{
-				Mode: wallet.PayGasSeparately + wallet.IgnoreErrors, // pay fee separately, ignore action errors
-				InternalMessage: &tlb.InternalMessage{
-					IHRDisabled: true, // disable hyper routing (currently not working in ton)
-					Bounce:      addr.IsBounceable(),
-					DstAddr:     addr,
-					Amount:      tlb.MustFromTON(fmt.Sprintf("%f", transfer.Amount)),
-					Body:        comment,
-				},
-			})
+			inMsg, err := w.wallet.BuildTransfer(
+				addr,
+				tlb.MustFromTON(fmt.Sprintf("%f", transfer.Amount)),
+				addr.IsBounceable(),
+				transfer.Comment,
+			)
+			if err != nil {
+				return nil, fmt.Errorf(
+					"wallet build internal message error: %w", err)
+			}
+			w.log.Debug("Transfer internal message", "msg", *inMsg, "inMsg", *inMsg.InternalMessage)
+			messages = append(messages, inMsg)
 		}
 
+		extMsg, err := w.wallet.BuildExternalMessageForMany(ctx, messages)
+		if err != nil {
+			return nil, fmt.Errorf("build wallet external msg error: %v", err)
+		}
+
+		w.log.Debug("Ext message", "msg", extMsg)
+
+		info, err := getHighLoadWalletMsgInfo(extMsg)
+		if err != nil {
+			return nil, fmt.Errorf("get external message ttl error: %v", err)
+		}
+
+		w.log.Debug("Message info", "data", info)
+
+		// TODO(carterqw): save in the db
+		// w.log.Debug("Messages", "msg", extMsg)
 		w.log.Debug("sending transaction and waiting for confirmation...")
 
 		w.mu.Lock()
@@ -148,7 +159,11 @@ func (w *Wallet) Send(ctx context.Context, batch *types.Batch, retries int64, ti
 		var attempt int64
 		var tx *tlb.Transaction
 
-		for attempt = 1; attempt < retries; attempt++ {
+		// ctxWithTimeout, cancel := context.WithTimeout(ctx, timeout)
+		// defer cancel()
+		err = w.client.SendExternalMessage(ctx, extMsg)
+		//tx, _, err = w.wallet.SendManyWaitTransaction(ctxWithTimeout, messages)
+		/* for attempt = 1; attempt < retries; attempt++ {
 			ctxWithTimeout, cancel := context.WithTimeout(ctx, timeout)
 			defer cancel()
 
@@ -163,7 +178,7 @@ func (w *Wallet) Send(ctx context.Context, batch *types.Batch, retries int64, ti
 				"tx", tx,
 				"error", err,
 			)
-		}
+		}*/
 
 		if err != nil {
 			return &TransactionResult{
@@ -175,7 +190,7 @@ func (w *Wallet) Send(ctx context.Context, batch *types.Batch, retries int64, ti
 			}, nil
 		}
 
-		w.log.Debug(
+		/*w.log.Debug(
 			"transaction sent",
 			"transaction", tx,
 			"hash", base64.StdEncoding.EncodeToString(tx.Hash),
@@ -184,14 +199,64 @@ func (w *Wallet) Send(ctx context.Context, batch *types.Batch, retries int64, ti
 			"explorer link",
 			"link", "https://testnet.tonscan.org/tx/"+
 				base64.URLEncoding.EncodeToString(tx.Hash),
-		)
+		)*/
 		return &TransactionResult{
 			Success:    true,
 			WalletHash: w.Hash(),
-			Hash:       string(tx.Hash),
-			QueryID:    queryID,
+			// Hash:       string(tx.Hash),
+			QueryID: queryID,
 		}, nil
 	}
 
 	return nil, fmt.Errorf("not enough balance")
+}
+
+type ExtMsgInfo struct {
+	UUID      uuid.UUID
+	QueryID   uint64
+	CreatedAt time.Time
+	ExpiresAt time.Time
+	TTL       uint64
+}
+
+func getHighLoadWalletMsgInfo(extMsg *tlb.ExternalMessage) (*ExtMsgInfo, error) {
+	body := extMsg.Payload()
+	if body == nil {
+		return nil, fmt.Errorf("nil body for external message")
+	}
+
+	hash := body.Hash()
+	u, err := uuid.FromBytes(hash[:16])
+	if err != nil {
+		return nil, err
+	}
+
+	var msg struct {
+		Sign    []byte     `tlb:"bits 512"`
+		Payload *cell.Cell `tlb:"^"` // 1 referenced cell
+	}
+	err = tlb.LoadFromCell(&msg, body.BeginParse())
+	if err != nil {
+		return nil, err
+	}
+	var payload struct {
+		SubwalletID uint32     `tlb:"## 32"`
+		Msg         *cell.Cell `tlb:"^"` // this is your MustStoreRef
+		Mode        uint8      `tlb:"## 8"`
+		QueryID     uint64     `tlb:"## 23"`
+		CreatedAt   uint64     `tlb:"## 64"`
+		TTL         uint64     `tlb:"## 22"`
+	}
+	err = tlb.LoadFromCell(&payload, msg.Payload.BeginParse())
+	if err != nil {
+		return nil, err
+	}
+
+	return &ExtMsgInfo{
+		UUID:      u,
+		QueryID:   payload.QueryID,
+		CreatedAt: time.Unix(int64(payload.CreatedAt), 0),
+		ExpiresAt: time.Unix(int64(payload.CreatedAt+payload.TTL), 0),
+		TTL:       payload.TTL,
+	}, nil
 }
