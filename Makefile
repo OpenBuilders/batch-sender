@@ -35,7 +35,7 @@ ctags:
 
 #? db: Opens postgres cli
 db:
-	PGPASSWORD=dev psql -U postgres -p 5432 -h db -d postgres
+	PGOPTIONS='--search_path=sender' PGPASSWORD=dev psql -U postgres -p 5432 -h db -d postgres
 
 #? db: Creates the database schema
 schema:

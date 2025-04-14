@@ -35,6 +35,7 @@ type Sender struct {
 	isTestnet bool
 	config    *Config
 	wallet    *Wallet
+	scanner   *TxScanner
 	repo      Repository
 	log       *slog.Logger
 }
@@ -45,6 +46,10 @@ type Repository interface {
 	UpdateBatchStatus(context.Context, uuid.UUID, types.BatchStatus) error
 	GetLastQueryID(context.Context, string) (uint64, error)
 	PersistWallet(context.Context, string, string, string) error
+	MarkBatchAsProcessing(context.Context, string, uuid.UUID, *types.ExtMsgInfo) error
+	GetLastWalletLt(context.Context, string) (uint64, error)
+	UpdateLastWalletLt(context.Context, string, uint64) error
+	PersistTransaction(context.Context, []byte, *types.ExtMsgInfo) error
 }
 
 func New(config *Config, client ton.APIClientWrapped, mnemonic string,
@@ -68,6 +73,11 @@ func (s *Sender) Run(ctx context.Context) error {
 		s.log.Error("couldn't initialize wallet", "error", err)
 		return err
 	}
+
+	txScanner := NewTxScanner(&TxScannerConfig{
+		DBTimeout: s.config.DBTimeout,
+	}, s.client, s.repo, s.wallet)
+	txScanner.Start(ctx)
 
 	go s.backfillFromDB()
 
@@ -100,8 +110,6 @@ func (s *Sender) initWallet(ctx context.Context) error {
 		return err
 	}
 
-	lastQueryID = 3
-
 	s.log.Debug("last query ID", "wallet", hash, "lastQueryID", lastQueryID)
 
 	highloadQueryID, err := FromQueryID(lastQueryID)
@@ -110,18 +118,13 @@ func (s *Sender) initWallet(ctx context.Context) error {
 	}
 
 	// initialize high-load wallet
-	wallet := NewWallet(s.client, s.mnemonic, s.isTestnet, highloadQueryID)
-	err = wallet.Init()
+	wallet, err := NewWallet(s.client, s.mnemonic, s.isTestnet, highloadQueryID)
 	if err != nil {
 		return fmt.Errorf("couldn't create wallet: %w", err)
 	}
 
-	address, err := wallet.GetAddress()
-	if err != nil {
-		return fmt.Errorf("get address error: %w", err)
-	}
-
-	s.log.Debug("Wallet address", "address", address)
+	address := wallet.GetAddress()
+	s.log.Debug("Wallet address", "address", address.Testnet(s.isTestnet))
 
 	ctxWithTimeout, cancel = context.WithTimeout(ctx, s.config.DBTimeout)
 	defer cancel()
@@ -145,6 +148,9 @@ func (s *Sender) worker(ctx context.Context, id int, batches <-chan uuid.UUID,
 	defer wg.Done()
 
 	s.log.Info("Starting sender worker", "id", id)
+
+	walletHash := s.wallet.Hash()
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -161,13 +167,6 @@ func (s *Sender) worker(ctx context.Context, id int, batches <-chan uuid.UUID,
 			ctxWithTimeout, cancel := context.WithTimeout(ctx, s.config.DBTimeout)
 			defer cancel()
 
-			// TODO:
-			// [ ] move generation of the queryiD to the sender
-			// [ ] add queryID parameter to send
-			// [ ] before sending a batch, generate queryID, store TX in the
-			//     unknown status
-			// [ ] timeout management - parameters are setup on wallet creation
-
 			batch, err := s.repo.GetTransfersBatch(ctxWithTimeout, batchUUID)
 			if err != nil {
 				s.log.Error(
@@ -180,30 +179,53 @@ func (s *Sender) worker(ctx context.Context, id int, batches <-chan uuid.UUID,
 
 			s.log.Debug("Got transfers batch", "batch", batch)
 
-			result, err := s.wallet.Send(ctx, batch, s.config.NumRetries, s.config.SendTimeout)
+			msg, err := s.wallet.PrepareMessage(ctx, batch)
 			if err != nil {
 				s.log.Error(
-					"sending tx failed",
+					"preparing message failed",
 					"batch", batch,
 					"error", err,
 				)
-				//TODO(carterqw): handle errors
 				continue
 			}
 
-			s.log.Debug("Got tx result", "result", result)
+			info, err := GetHighLoadWalletMsgInfo(msg)
+			if err != nil {
+				s.log.Error(
+					"get external message ttl error",
+					"message", msg,
+					"error", err,
+				)
+			}
+
+			s.log.Debug("Info", "info", info)
 
 			ctxWithTimeout, cancel = context.WithTimeout(ctx, s.config.DBTimeout)
 			defer cancel()
 
-			//err = s.repo.PersistTransaction(ctxWithTimeout, result)
-			//if err
-
-			/* err = s.repo.UpdateBatchStatus(context.Background(), batchUUID, types.StatusPending)
+			err = s.repo.MarkBatchAsProcessing(ctxWithTimeout, walletHash,
+				batch.UUID, info)
 			if err != nil {
-				s.log.Error("couldn't update batch")
+				s.log.Error(
+					"couldn't persist external message",
+					"wallet", walletHash,
+					"batch", batch.UUID,
+					"info", info,
+				)
+
 				continue
-			}*/
+			}
+
+			err = s.wallet.SendMessage(ctx, msg)
+			if err != nil {
+				s.log.Error(
+					"sending message failed",
+					"batch", batch,
+					"msg", msg,
+					"error", err,
+				)
+				continue
+			}
 		}
 	}
 }

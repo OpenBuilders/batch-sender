@@ -9,7 +9,6 @@ import (
 	"os"
 	"time"
 
-	"github.com/openbuilders/batch-sender/internal/batcher"
 	"github.com/openbuilders/batch-sender/internal/queue"
 
 	"github.com/prometheus/client_golang/prometheus/promhttp"
@@ -22,7 +21,6 @@ type APIHandler func(w http.ResponseWriter, r *http.Request) (
 type Server struct {
 	config     *Config
 	publisher  *queue.Publisher
-	batcher    *batcher.Batcher
 	httpServer *http.Server
 	ctx        context.Context
 	log        *slog.Logger
@@ -39,12 +37,10 @@ type Config struct {
 	ID           string
 }
 
-func NewServer(config *Config, publisher *queue.Publisher,
-	batcher *batcher.Batcher) *Server {
+func NewServer(config *Config, publisher *queue.Publisher) *Server {
 	return &Server{
 		config:    config,
 		publisher: publisher,
-		batcher:   batcher,
 		log:       slog.With("pod", config.ID, "component", "web-server"),
 		httpServer: &http.Server{
 			ReadTimeout:  config.ReadTimeout,

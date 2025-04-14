@@ -96,7 +96,7 @@ func main() {
 	}
 
 	batcher := batcher.New(&batcher.Config{
-		BatchSize:       20,
+		BatchSize:       200,
 		BatchTimeout:    1 * time.Second,
 		BatchDelay:      10 * time.Millisecond,
 		DBTimeout:       3 * time.Second,
@@ -122,7 +122,7 @@ func main() {
 		MessageTTL:  1 * time.Hour,
 	}, lightclientAPI, mnemonic, isTestnet, pgClient, batcher.Batches)
 
-	server := api.NewServer(&config, publisher, batcher)
+	server := api.NewServer(&config, publisher)
 
 	// Graceful shutdown handling
 	stop := make(chan os.Signal, 1)
