@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"sync"
 	"time"
 
 	"github.com/openbuilders/batch-sender/internal/helpers"
@@ -12,14 +11,19 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/xssnick/tonutils-go/ton"
+
+	"golang.org/x/sync/errgroup"
+)
+
+const (
+	ErrorCountTolerated = 5
 )
 
 type Config struct {
-	NumWorkers  int64
-	NumRetries  int64
-	SendTimeout time.Duration
-	DBTimeout   time.Duration
-	MessageTTL  time.Duration
+	NumWorkers              int64
+	DBTimeout               time.Duration
+	MessageTTL              time.Duration
+	ExpirationCheckInterval time.Duration
 }
 
 type MessageBuilderFunc func(context.Context, uint32) (uint32, int64, error)
@@ -42,6 +46,7 @@ type Sender struct {
 
 type Repository interface {
 	GetNewBatches(context.Context) ([]uuid.UUID, error)
+	ResubmitExpiredBatches(context.Context, time.Duration) ([]uuid.UUID, error)
 	GetTransfersBatch(context.Context, uuid.UUID) (*types.Batch, error)
 	UpdateBatchStatus(context.Context, uuid.UUID, types.BatchStatus) error
 	GetLastQueryID(context.Context, string) (uint64, error)
@@ -77,17 +82,45 @@ func (s *Sender) Run(ctx context.Context) error {
 	txScanner := NewTxScanner(&TxScannerConfig{
 		DBTimeout: s.config.DBTimeout,
 	}, s.client, s.repo, s.wallet)
-	txScanner.Start(ctx)
+
+	g, ctx := errgroup.WithContext(ctx)
+
+	g.Go(func() error {
+		err := txScanner.Start(ctx)
+		if err != nil {
+			return fmt.Errorf("tx scanner start error: %w", err)
+		}
+
+		return nil
+	})
 
 	go s.backfillFromDB()
 
-	var wg sync.WaitGroup
+	g.Go(func() error {
+		err := s.rebatchExpired(ctx)
+		if err != nil {
+			return fmt.Errorf("expired rebatcher error: %w", err)
+		}
+
+		return nil
+	})
+
 	for i := 0; i < int(s.config.NumWorkers); i++ {
-		wg.Add(1)
-		go s.worker(ctx, i, s.batches, &wg)
+		g.Go(func() error {
+			err := s.worker(ctx, i, s.batches)
+			if err != nil {
+				return fmt.Errorf(
+					"sender worker #%d exited with error: %w", i, err)
+			}
+
+			return nil
+		})
 	}
 
-	wg.Wait()
+	if err := g.Wait(); err != nil {
+		return fmt.Errorf("sender exited with error: %w", err)
+	}
+
 	s.log.Info("Stopped sender")
 
 	return nil
@@ -118,7 +151,8 @@ func (s *Sender) initWallet(ctx context.Context) error {
 	}
 
 	// initialize high-load wallet
-	wallet, err := NewWallet(s.client, s.mnemonic, s.isTestnet, highloadQueryID)
+	wallet, err := NewWallet(s.client, s.mnemonic, s.isTestnet,
+		s.config.MessageTTL, highloadQueryID)
 	if err != nil {
 		return fmt.Errorf("couldn't create wallet: %w", err)
 	}
@@ -143,10 +177,7 @@ func (s *Sender) initWallet(ctx context.Context) error {
 	return nil
 }
 
-func (s *Sender) worker(ctx context.Context, id int, batches <-chan uuid.UUID,
-	wg *sync.WaitGroup) {
-	defer wg.Done()
-
+func (s *Sender) worker(ctx context.Context, id int, batches <-chan uuid.UUID) error {
 	s.log.Info("Starting sender worker", "id", id)
 
 	walletHash := s.wallet.Hash()
@@ -155,11 +186,11 @@ func (s *Sender) worker(ctx context.Context, id int, batches <-chan uuid.UUID,
 		select {
 		case <-ctx.Done():
 			s.log.Info("Stopping sender worker...", "id", id)
-			return
+			return nil
 		case batchUUID, ok := <-s.batches:
 			if !ok {
 				s.log.Debug("Batches channel is closed")
-				return
+				return fmt.Errorf("batches channel is closed")
 			}
 
 			s.log.Debug("Received a new batch", "uuid", batchUUID)
@@ -228,6 +259,8 @@ func (s *Sender) worker(ctx context.Context, id int, batches <-chan uuid.UUID,
 			}
 		}
 	}
+
+	return nil
 }
 
 // backfillFromDB reads all batches in the 'new' status and writes them to the
@@ -253,4 +286,57 @@ func (s *Sender) backfillFromDB() {
 		s.log.Debug("Backfilling completed", "count", len(uuids))
 		return
 	}
+}
+
+// rebatchExpired periodically checks the database for batches which external
+// messages have expired already and still haven't been confirmed.
+func (s *Sender) rebatchExpired(ctx context.Context) error {
+	s.log.Debug("Starting expiration checker")
+
+	checkInterval := time.Duration(0)
+
+	errorCount := 0
+
+	for {
+		select {
+		case <-ctx.Done():
+			s.log.Debug("Shutting down expiration checker")
+			return nil
+		case <-time.After(checkInterval):
+			s.log.Debug("Checking expired batches")
+			checkInterval = s.config.ExpirationCheckInterval
+		}
+
+		ctxWithTimeout, cancel := context.WithTimeout(context.Background(),
+			s.config.DBTimeout)
+		defer cancel()
+
+		uuids, err := s.repo.ResubmitExpiredBatches(ctxWithTimeout,
+			s.config.MessageTTL)
+		if err != nil {
+			s.log.Error(
+				"couldn't resubmit expired batches",
+				"error", err,
+			)
+
+			errorCount += 1
+			if errorCount >= ErrorCountTolerated {
+				s.log.Error(
+					"reached max error count, exiting",
+					"count", errorCount,
+				)
+				return fmt.Errorf("max error count reached")
+			}
+
+			continue
+		}
+
+		s.log.Info("Expired batches UUIDs", "uuids", uuids)
+		for _, uuid := range uuids {
+			s.batches <- uuid
+		}
+		errorCount = 0
+	}
+
+	return nil
 }

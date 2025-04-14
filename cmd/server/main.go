@@ -115,11 +115,10 @@ func main() {
 	lightclientAPI := ton.NewAPIClient(client, ton.ProofCheckPolicyFast).WithRetry()
 
 	sender := sender.New(&sender.Config{
-		NumWorkers:  5,
-		NumRetries:  5,
-		SendTimeout: 10 * time.Second,
-		DBTimeout:   3 * time.Second,
-		MessageTTL:  1 * time.Hour,
+		NumWorkers:              5,
+		DBTimeout:               3 * time.Second,
+		MessageTTL:              300 * time.Second,
+		ExpirationCheckInterval: 30 * time.Second,
 	}, lightclientAPI, mnemonic, isTestnet, pgClient, batcher.Batches)
 
 	server := api.NewServer(&config, publisher)

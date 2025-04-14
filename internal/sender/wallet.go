@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"math/rand"
 	"strings"
 	"sync"
 	"time"
@@ -18,23 +19,25 @@ import (
 )
 
 type Wallet struct {
-	client    ton.APIClientWrapped
-	mnemonic  string
-	isTestnet bool
-	queryID   *HighloadQueryID
-	wallet    *wallet.Wallet
-	mu        sync.Mutex
-	log       *slog.Logger
+	client     ton.APIClientWrapped
+	mnemonic   string
+	isTestnet  bool
+	messageTTL time.Duration
+	queryID    *HighloadQueryID
+	wallet     *wallet.Wallet
+	mu         sync.Mutex
+	log        *slog.Logger
 }
 
 func NewWallet(client ton.APIClientWrapped, mnemonic string, isTestnet bool,
-	queryID *HighloadQueryID) (*Wallet, error) {
+	messageTTL time.Duration, queryID *HighloadQueryID) (*Wallet, error) {
 	wallet := &Wallet{
-		client:    client,
-		mnemonic:  mnemonic,
-		isTestnet: isTestnet,
-		queryID:   queryID,
-		log:       slog.With("component", "wallet"),
+		client:     client,
+		mnemonic:   mnemonic,
+		isTestnet:  isTestnet,
+		messageTTL: messageTTL,
+		queryID:    queryID,
+		log:        slog.With("component", "wallet"),
 	}
 
 	err := wallet.init()
@@ -72,6 +75,14 @@ func (w *Wallet) PrepareMessage(ctx context.Context, batch *types.Batch) (
 
 // SendMessage broadcasts the message created by the PrepareMessage method.
 func (w *Wallet) SendMessage(ctx context.Context, extMsg *tlb.ExternalMessage) error {
+	// Seed the random number generator
+	rand.Seed(time.Now().UnixNano())
+
+	// 50% chance
+	if rand.Intn(2) != 0 {
+		return fmt.Errorf("out of luck, not sending")
+	}
+
 	block, err := w.client.CurrentMasterchainInfo(ctx)
 	if err != nil {
 		return fmt.Errorf("master chain info error: %w", err)
@@ -115,7 +126,7 @@ func (w *Wallet) init() error {
 
 	// initialize high-load wallet
 	newWallet, err := wallet.FromSeed(w.client, words, wallet.ConfigHighloadV3{
-		MessageTTL: 60 * 5,
+		MessageTTL: uint32(w.messageTTL.Seconds()),
 		MessageBuilder: func(ctx context.Context, subWalletId uint32) (id uint32, createdAt int64, err error) {
 			// Due to specific of externals emulation on liteserver,
 			// we need to take something less than or equals to block time, as message creation time,

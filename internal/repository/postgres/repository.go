@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/openbuilders/batch-sender/internal/types"
 
@@ -413,4 +414,51 @@ func (p *Postgres) persistExternalMessage(ctx context.Context, walletHash string
 	}
 
 	return nil
+}
+
+func (p *Postgres) ResubmitExpiredBatches(ctx context.Context,
+	messageTTL time.Duration) ([]uuid.UUID, error) {
+	p.log.Debug("Resubmitting expired batches", "ttl", messageTTL)
+
+	var expiredBatches []uuid.UUID
+
+	stmt := fmt.Sprintf(`
+	WITH pending_batches AS (
+		SELECT uuid
+		FROM sender.batch
+		WHERE status = 'processing'
+	), expired_batches AS (
+		SELECT b.*
+		FROM pending_batches b
+		LEFT JOIN LATERAL (
+			SELECT *
+			FROM sender.external_message m
+			WHERE b.uuid = m.batch_uuid
+			ORDER BY expired_at
+			DESC LIMIT 1
+		) m ON true
+		WHERE m.expired_at < NOW() - INTERVAL '%d seconds'
+	)
+	SELECT * FROM expired_batches;
+	`, uint64(messageTTL.Seconds()))
+	rows, err := p.pg.Query(ctx, stmt)
+	if err != nil {
+		return nil, fmt.Errorf("couldn't get new batches: %w", err)
+	}
+
+	defer rows.Close()
+
+	for rows.Next() {
+		var id uuid.UUID
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		expiredBatches = append(expiredBatches, id)
+	}
+
+	if rows.Err() != nil {
+		return nil, rows.Err()
+	}
+
+	return expiredBatches, nil
 }
