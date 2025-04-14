@@ -96,7 +96,7 @@ func main() {
 	}
 
 	batcher := batcher.New(&batcher.Config{
-		BatchSize:       200,
+		BatchSize:       6,
 		BatchTimeout:    1 * time.Second,
 		BatchDelay:      10 * time.Millisecond,
 		DBTimeout:       3 * time.Second,

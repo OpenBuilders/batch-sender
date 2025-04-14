@@ -53,7 +53,7 @@ func (p *Postgres) PersistMessage(ctx context.Context, msg types.SendTONMessage)
 }
 
 func (p *Postgres) NextBatch(ctx context.Context, maxItems int) (uuid.UUID, error) {
-
+	p.log.Debug("getting next batch", "size", maxItems)
 	var batchUUID string
 
 	// atomically get up to maxItems new transactions, mark them as batched
@@ -416,6 +416,9 @@ func (p *Postgres) persistExternalMessage(ctx context.Context, walletHash string
 	return nil
 }
 
+// ResubmitExpiredBatches finds batches in the processing status and their most
+// recent external message that have already expired and re-publishes such
+// batches.
 func (p *Postgres) ResubmitExpiredBatches(ctx context.Context,
 	messageTTL time.Duration) ([]uuid.UUID, error) {
 	p.log.Debug("Resubmitting expired batches", "ttl", messageTTL)

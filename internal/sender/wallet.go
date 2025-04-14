@@ -75,6 +75,7 @@ func (w *Wallet) PrepareMessage(ctx context.Context, batch *types.Batch) (
 
 // SendMessage broadcasts the message created by the PrepareMessage method.
 func (w *Wallet) SendMessage(ctx context.Context, extMsg *tlb.ExternalMessage) error {
+	return fmt.Errorf("No sending today")
 	// Seed the random number generator
 	rand.Seed(time.Now().UnixNano())
 
