@@ -26,10 +26,10 @@ func (p *Postgres) PersistMessage(ctx context.Context, msg types.SendTONMessage)
 	int64, error) {
 
 	fields := []string{"order_id", "wallet", "amount", "comment"}
-	rows := make([][]any, len(msg.Data))
+	rows := make([][]any, len(msg.Data.Data))
 
-	for i, tr := range msg.Data {
-		rows[i] = []any{msg.TransactionID, tr.Wallet, tr.Amount, tr.Comment}
+	for i, tr := range msg.Data.Data {
+		rows[i] = []any{msg.Data.TransactionID, tr.Wallet, tr.Amount, tr.Comment}
 	}
 
 	p.log.Debug("COPY", "fields", fields, "rows", rows)

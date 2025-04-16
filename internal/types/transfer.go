@@ -30,8 +30,11 @@ type DataItem struct {
 }
 
 type SendTONMessage struct {
-	TransactionID string     `json:"transaction_id"`
-	Data          []DataItem `json:"data"`
+	Pattern string `json:"pattern"`
+	Data    struct {
+		TransactionID string     `json:"transaction_id"`
+		Data          []DataItem `json:"data"`
+	} `json:"data"`
 }
 
 type Batch struct {

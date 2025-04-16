@@ -3,7 +3,6 @@ package batcher
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"log/slog"
 	"time"
 
@@ -50,7 +49,7 @@ func New(config *Config, conn *amqp.Connection, repo Repository) *Batcher {
 
 func (b *Batcher) Run(ctx context.Context) error {
 	b.log.Info("Starting batcher")
-	ch, err := queue.EnsureQueueExists(b.conn, queue.QueueSendTON)
+	ch, err := queue.EnsureQueueExists(b.conn, queue.QueueTONTransfer)
 	if err != nil {
 		return err
 	}
@@ -84,8 +83,10 @@ func (b *Batcher) Run(ctx context.Context) error {
 			return ctx.Err()
 		case msg, ok := <-messages:
 			if !ok {
-				b.log.Debug("Queue is closed")
-				return fmt.Errorf("queue is closed")
+				b.log.Debug("queue is closed")
+				time.Sleep(1 * time.Second)
+				b.reconnect = true
+				continue
 			}
 
 			count, _ := b.handleMessage(msg)
@@ -137,13 +138,13 @@ func (b *Batcher) restartConsumer() (<-chan amqp.Delivery, error) {
 	b.channel = ch
 
 	return ch.Consume(
-		string(queue.QueueSendTON), // queue
-		"batcher",                  // consumer
-		false,                      // autoAck
-		false,                      // exclusive
-		false,                      // noLocal
-		false,                      // no wait
-		nil,                        // args
+		string(queue.QueueTONTransfer), // queue
+		"batcher",                      // consumer
+		false,                          // autoAck
+		false,                          // exclusive
+		false,                          // noLocal
+		false,                          // no wait
+		nil,                            // args
 	)
 }
 

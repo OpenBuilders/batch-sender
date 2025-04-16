@@ -9,7 +9,7 @@ import (
 type QueueName string
 
 const (
-	QueueSendTON QueueName = "send-ton"
+	QueueTONTransfer QueueName = "ton_transfer"
 )
 
 type Publisher struct {

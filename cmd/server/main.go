@@ -77,7 +77,7 @@ func main() {
 		return
 	}
 
-	publisher := queue.NewPublisher(rabbitConn, queue.QueueSendTON)
+	publisher := queue.NewPublisher(rabbitConn, queue.QueueTONTransfer)
 
 	instanceID := getInstanceID()
 
