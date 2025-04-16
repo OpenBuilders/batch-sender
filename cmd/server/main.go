@@ -20,7 +20,6 @@ import (
 	"github.com/openbuilders/batch-sender/internal/sender"
 
 	"github.com/jackc/pgx/v5/pgxpool"
-	amqp "github.com/rabbitmq/amqp091-go"
 	"github.com/xssnick/tonutils-go/liteclient"
 	"github.com/xssnick/tonutils-go/ton"
 	"golang.org/x/sync/errgroup"
@@ -42,14 +41,11 @@ func main() {
 	mnemonic := env.GetString("MNEMONIC", "")
 	isTestnet := env.GetBool("IS_TESTNET", true)
 
-	slog.Info("Connecting to RabbitMQ...")
-
-	rabbitConn, err := amqp.Dial(rabbitURL)
-	if err != nil {
-		slog.Error("connect to RabbitMQ", "error", err)
-		return
-	}
-	defer rabbitConn.Close()
+	queueManager := queue.New(&queue.Config{
+		URL:               rabbitURL,
+		ReconnectInterval: 3 * time.Second,
+		ConnectTimeout:    3 * time.Second,
+	})
 
 	// create the context and register signals that could cause its cancellation
 	// and gracefull shutdown
@@ -77,8 +73,6 @@ func main() {
 		return
 	}
 
-	publisher := queue.NewPublisher(rabbitConn, queue.QueueTONTransfer)
-
 	instanceID := getInstanceID()
 
 	//healthChecker := health.NewChecker(redisClient, db, &health.Config{
@@ -101,7 +95,8 @@ func main() {
 		BatchDelay:      10 * time.Millisecond,
 		DBTimeout:       3 * time.Second,
 		ParallelBatches: 5,
-	}, rabbitConn, pgClient)
+	}, queueManager, pgClient)
+	batcher.Run(ctx)
 
 	client := liteclient.NewConnectionPool()
 
@@ -121,7 +116,7 @@ func main() {
 		ExpirationCheckInterval: 30 * time.Second,
 	}, lightclientAPI, mnemonic, isTestnet, pgClient, batcher.Batches)
 
-	server := api.NewServer(&config, publisher)
+	server := api.NewServer(&config, queueManager)
 
 	// Graceful shutdown handling
 	stop := make(chan os.Signal, 1)
@@ -140,9 +135,9 @@ func main() {
 	})
 
 	errGroup.Go(func() error {
-		err := batcher.Run(ctx)
+		err := queueManager.Start(ctx)
 		if err != nil {
-			slog.Error("Batcher exited with an error", "error", err)
+			slog.Error("Queue manager exited with an error", "error", err)
 			return err
 		}
 

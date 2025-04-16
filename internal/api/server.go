@@ -20,7 +20,7 @@ type APIHandler func(w http.ResponseWriter, r *http.Request) (
 
 type Server struct {
 	config     *Config
-	publisher  *queue.Publisher
+	queue      *queue.Queue
 	httpServer *http.Server
 	ctx        context.Context
 	log        *slog.Logger
@@ -37,11 +37,11 @@ type Config struct {
 	ID           string
 }
 
-func NewServer(config *Config, publisher *queue.Publisher) *Server {
+func NewServer(config *Config, rabbit *queue.Queue) *Server {
 	return &Server{
-		config:    config,
-		publisher: publisher,
-		log:       slog.With("pod", config.ID, "component", "web-server"),
+		config: config,
+		queue:  rabbit,
+		log:    slog.With("pod", config.ID, "component", "web-server"),
 		httpServer: &http.Server{
 			ReadTimeout:  config.ReadTimeout,
 			WriteTimeout: config.WriteTimeout,

@@ -3,6 +3,7 @@ package batcher
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"time"
 
@@ -25,7 +26,7 @@ type Config struct {
 type Batcher struct {
 	Batches   chan uuid.UUID
 	config    *Config
-	conn      *amqp.Connection
+	queue     *queue.Queue
 	repo      Repository
 	channel   *amqp.Channel
 	log       *slog.Logger
@@ -37,56 +38,85 @@ type Repository interface {
 	NextBatch(context.Context, int) (uuid.UUID, error)
 }
 
-func New(config *Config, conn *amqp.Connection, repo Repository) *Batcher {
+func New(config *Config, rabbit *queue.Queue, repo Repository) *Batcher {
 	return &Batcher{
 		Batches: make(chan uuid.UUID, config.ParallelBatches),
 		config:  config,
-		conn:    conn,
+		queue:   rabbit,
 		repo:    repo,
 		log:     slog.With("component", "batcher"),
 	}
 }
 
-func (b *Batcher) Run(ctx context.Context) error {
+func (b *Batcher) Run(ctx context.Context) {
 	b.log.Info("Starting batcher")
-	ch, err := queue.EnsureQueueExists(b.conn, queue.QueueTONTransfer)
-	if err != nil {
-		return err
-	}
-	// we'll open a new channel for the consumer anyway
-	ch.Close()
 
-	messages, err := b.restartConsumer()
-	if err != nil {
-		return err
-	}
+	b.queue.RegisterWorker(func(wrkCtx context.Context, conn *amqp.Connection) error {
+		b.log.Debug("started batcher worker")
+		for {
+			select {
+			case <-wrkCtx.Done():
+				b.log.Debug("worker shutting down due to manager reconnect")
+				return nil
+			default:
+			}
 
-	var unbatched int64
-
-	updateInterval := b.config.BatchTimeout
-
-	for {
-		if b.reconnect {
-			b.log.Debug("Reconnection is needed")
-
-			messages, err = b.restartConsumer()
+			ch, err := conn.Channel()
 			if err != nil {
+				b.log.Error("channel open failed", "error", err)
+				time.Sleep(time.Second)
+				continue
+			}
+
+			closeChan := ch.NotifyClose(make(chan *amqp.Error, 1))
+			ch.NotifyClose(closeChan)
+
+			q, err := ch.QueueDeclare(
+				string(queue.QueueTONTransfer),
+				true,
+				false,
+				false,
+				false,
+				nil,
+			)
+			if err != nil {
+				b.log.Error("queue declaration failed", "error", err)
 				return err
 			}
 
-			b.reconnect = false
-		}
+			messages, err := ch.Consume(q.Name, "batcher", false, false, false, false, nil)
+			if err != nil {
+				b.log.Error("message consume failed", "error", err)
+				return err
+			}
+			go b.consumeMessages(wrkCtx, messages)
 
+			select {
+			case <-wrkCtx.Done():
+				b.log.Debug("context cancelled during consumption")
+				return nil
+			case err := <-closeChan:
+				b.log.Debug("channel is closed, reconnecting", "error", err)
+			}
+		}
+		return nil
+	})
+}
+
+func (b *Batcher) consumeMessages(ctx context.Context,
+	messages <-chan amqp.Delivery) error {
+	var unbatched int64
+	updateInterval := b.config.BatchTimeout
+
+	for {
 		select {
 		case <-ctx.Done():
-			b.log.Info("Stopping batcher...")
+			b.log.Info("Stopping consumer...")
 			return ctx.Err()
 		case msg, ok := <-messages:
 			if !ok {
-				b.log.Debug("queue is closed")
-				time.Sleep(1 * time.Second)
-				b.reconnect = true
-				continue
+				b.log.Debug("channel is closed")
+				return fmt.Errorf("channel is closed")
 			}
 
 			count, _ := b.handleMessage(msg)
@@ -117,35 +147,6 @@ func (b *Batcher) Run(ctx context.Context) error {
 			unbatched = 0
 		}
 	}
-
-	b.log.Info("Batcher stopped")
-
-	return nil
-}
-
-func (b *Batcher) restartConsumer() (<-chan amqp.Delivery, error) {
-	if b.channel != nil && !b.channel.IsClosed() {
-		b.channel.Close()
-	}
-
-	ch, err := b.conn.Channel()
-	if err != nil {
-		return nil, err
-	}
-
-	ch.Qos(b.config.BatchSize, 0, false)
-
-	b.channel = ch
-
-	return ch.Consume(
-		string(queue.QueueTONTransfer), // queue
-		"batcher",                      // consumer
-		false,                          // autoAck
-		false,                          // exclusive
-		false,                          // noLocal
-		false,                          // no wait
-		nil,                            // args
-	)
 }
 
 // handleMessage parses the incoming message and persists in the database,
@@ -154,20 +155,6 @@ func (b *Batcher) handleMessage(message amqp.Delivery) (
 	msgCount int64, err error) {
 
 	b.log.Debug("Handling incoming message", "msg", message)
-
-	defer func() {
-		if err != nil {
-			// if there was an issue with acking a message, or if we returned
-			// early, we need to close the channel and restart the consumer,
-			// otherwise, unacked messages will stay in the limbo state until
-			// the connection is restarted.
-			// Unacked messages will accumulate affecting prefetching and
-			// eventually when they reach the BatchSize, the consumer will stop
-			// receiving messages. To avoid that, we reconnect immediately when
-			// we see ack errors.
-			b.reconnect = true
-		}
-	}()
 
 	var msg types.SendTONMessage
 
@@ -195,6 +182,7 @@ func (b *Batcher) handleMessage(message amqp.Delivery) (
 		b.log.Info("duplicate transfers, skipping", "msg", msg)
 	}
 
+	b.log.Debug("acking")
 	err = message.Ack(false)
 	if err != nil {
 		b.log.Error(

@@ -6,6 +6,7 @@ import (
 	"io/ioutil"
 	"net/http"
 
+	"github.com/openbuilders/batch-sender/internal/queue"
 	"github.com/openbuilders/batch-sender/internal/types"
 )
 
@@ -29,7 +30,7 @@ func (s *Server) SendHandler(w http.ResponseWriter, r *http.Request) (
 
 	s.log.Debug("Message", "data", message)
 
-	err = s.publisher.Publish(bodyBytes)
+	err = s.queue.Publish(queue.QueueTONTransfer, bodyBytes)
 	if err != nil {
 		s.log.Error(
 			"couldn't enqueue message",
