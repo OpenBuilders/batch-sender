@@ -98,7 +98,12 @@ func (s *TxScanner) processNewTransactions(ctx context.Context,
 		// TODO(carterqw): add more checks on bounced etc
 		s.log.Debug("parsed info", "info", info)
 
-		err = s.repo.PersistTransaction(ctx, tx.Hash, info)
+		success := false
+		if desc, ok := tx.Description.(*tlb.TransactionDescriptionOrdinary); ok {
+			success = !desc.Aborted
+		}
+
+		err = s.repo.PersistTransaction(ctx, tx.Hash, success, info)
 		if err != nil {
 			log.Fatalf("can't save tx confirmation: %v", err)
 		}

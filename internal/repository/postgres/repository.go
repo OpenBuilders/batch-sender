@@ -312,10 +312,10 @@ func (p *Postgres) PersistWallet(ctx context.Context, hash, mainnetAddress,
 }
 
 func (p *Postgres) PersistTransaction(ctx context.Context, hash []byte,
-	info *types.ExtMsgInfo) error {
+	success bool, info *types.ExtMsgInfo) error {
 	stmt := `
-	INSERT INTO sender.transaction (hash, message_uuid)
-	VALUES (@tx_hash, @msg_uuid)
+	INSERT INTO sender.transaction (hash, message_uuid, success)
+	VALUES (@tx_hash, @msg_uuid, @success)
 	`
 
 	tx_hash := base64.URLEncoding.EncodeToString(hash)
@@ -323,21 +323,34 @@ func (p *Postgres) PersistTransaction(ctx context.Context, hash []byte,
 	_, err := p.pg.Exec(ctx, stmt, pgx.NamedArgs{
 		"tx_hash":  tx_hash,
 		"msg_uuid": info.UUID,
+		"success":  success,
 	})
 	if err != nil {
 		return fmt.Errorf("inserting tx %s %s error: %w", tx_hash, info.UUID, err)
 	}
 
-	return p.updateBatch(ctx, info.UUID)
+	return p.updateBatch(ctx, success, info.UUID)
 }
 
-func (p *Postgres) updateBatch(ctx context.Context, msgUUID uuid.UUID) error {
-	p.log.Debug("Updating batch by msg uuid", "uuid", msgUUID)
+func (p *Postgres) updateBatch(ctx context.Context, success bool,
+	msgUUID uuid.UUID) error {
+	p.log.Debug("Updating batch by msg uuid", "success", success, "uuid", msgUUID)
+
+	var batchStatus types.BatchStatus
+	var transferStatus types.TransferStatus
+
+	if success {
+		batchStatus = types.BatchStatusSuccess
+		transferStatus = types.TransferStatusSuccess
+	} else {
+		batchStatus = types.BatchStatusError
+		transferStatus = types.TransferStatusError
+	}
 
 	stmt := `
 	WITH updated_batch AS (
 		UPDATE sender.batch b
-		SET status = 'success'
+		SET status = @batch_status
 		FROM sender.external_message m
 		WHERE
 			b.uuid = m.batch_uuid AND
@@ -345,7 +358,7 @@ func (p *Postgres) updateBatch(ctx context.Context, msgUUID uuid.UUID) error {
 		RETURNING b.transfer_ids
 	)
 	UPDATE sender.transfer
-	SET status = 'success'
+	SET status = @transfer_status
 	WHERE id IN (
 		SELECT UNNEST(transfer_ids)
 		FROM updated_batch
@@ -353,11 +366,13 @@ func (p *Postgres) updateBatch(ctx context.Context, msgUUID uuid.UUID) error {
 	`
 
 	resp, err := p.pg.Exec(ctx, stmt, pgx.NamedArgs{
-		"msg_uuid": msgUUID,
+		"batch_status":    batchStatus,
+		"transfer_status": transferStatus,
+		"msg_uuid":        msgUUID,
 	})
 	if err != nil {
 		return fmt.Errorf(
-			"updating batch by msg uuid %s %s error: %w", msgUUID, err)
+			"updating batch by msg uuid %s error: %w", msgUUID, err)
 	}
 
 	if resp.RowsAffected() == 0 {

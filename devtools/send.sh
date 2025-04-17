@@ -15,7 +15,7 @@ generate_id() {
 
 for ((i = 1; i <= ITERATIONS; i++)); do
   ID=$(generate_id)
-  JSON="{\"pattern\": \"send-ton\", \"data\": {\"transaction_id\": \"${ID}\", \"data\": [{\"wallet\": \"0QBaxcn6UaXPNCWX0tasT5QpeBcQvITvt2FNEzXlERYa8qWe\", \"amount\": 0.0003, \"comment\": \"Payment for #${ID}\"},{\"wallet\": \"0QBaxcn6UaXPNCWX0tasT5QpeBcQvITvt2FNEzXlERYa8qWe\", \"amount\": 0.0002, \"comment\": \"#${ID}\"}, {\"wallet\": \"0QBaxcn6UaXPNCWX0tasT5QpeBcQvITvt2FNEzXlERYa8qWe\", \"amount\": 0.0001, \"comment\": \"#${ID}\"}]}}"
+  JSON="{\"pattern\": \"send-ton\", \"data\": {\"transaction_id\": \"${ID}\", \"data\": [{\"wallet\": \"0QBaxcn6UaXPNCWX0tasT5QpeBcQvITvt2FNEzXlERYa8qWe\", \"amount\": 10.0003, \"comment\": \"Payment for #${ID}\"},{\"wallet\": \"0QBaxcn6UaXPNCWX0tasT5QpeBcQvITvt2FNEzXlERYa8qWe\", \"amount\": 0.0002, \"comment\": \"#${ID}\"}, {\"wallet\": \"0QBaxcn6UaXPNCWX0tasT5QpeBcQvITvt2FNEzXlERYa8qWe\", \"amount\": 0.0001, \"comment\": \"#${ID}\"}]}}"
 
   echo "Posting: $JSON"
   

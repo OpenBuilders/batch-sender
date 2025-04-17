@@ -54,7 +54,7 @@ type Repository interface {
 	MarkBatchAsProcessing(context.Context, string, uuid.UUID, *types.ExtMsgInfo) error
 	GetLastWalletLt(context.Context, string) (uint64, error)
 	UpdateLastWalletLt(context.Context, string, uint64) error
-	PersistTransaction(context.Context, []byte, *types.ExtMsgInfo) error
+	PersistTransaction(context.Context, []byte, bool, *types.ExtMsgInfo) error
 }
 
 func New(config *Config, client ton.APIClientWrapped, mnemonic string,

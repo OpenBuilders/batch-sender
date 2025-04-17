@@ -9,10 +9,19 @@ import (
 type BatchStatus string
 
 const (
-	StatusNew     BatchStatus = "new"
-	StatusPending BatchStatus = "pending"
-	StatusSuccess BatchStatus = "success"
-	StatusError   BatchStatus = "error"
+	BatchStatusNew     BatchStatus = "new"
+	BatchStatusPending BatchStatus = "pending"
+	BatchStatusSuccess BatchStatus = "success"
+	BatchStatusError   BatchStatus = "error"
+)
+
+type TransferStatus string
+
+const (
+	TransferStatusNew     TransferStatus = "new"
+	TransferStatusBatched TransferStatus = "batched"
+	TransferStatusSuccess TransferStatus = "success"
+	TransferStatusError   TransferStatus = "error"
 )
 
 type Transfer struct {
