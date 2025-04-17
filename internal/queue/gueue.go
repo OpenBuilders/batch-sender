@@ -14,6 +14,7 @@ type QueueName string
 
 const (
 	QueueTONTransfer QueueName = "ton_transfer"
+	QueueMainService QueueName = "main-service"
 )
 
 type Publisher struct {
@@ -144,6 +145,10 @@ func (q *Queue) cleanup() {
 }
 
 func (q *Queue) Publish(queueName QueueName, message []byte) error {
+	if q.conn == nil {
+		return fmt.Errorf("connection is not open yet")
+	}
+
 	ch, err := q.conn.Channel()
 	if err != nil {
 		return fmt.Errorf("couldn't open channel", "error", err)

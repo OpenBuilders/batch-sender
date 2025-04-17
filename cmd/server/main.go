@@ -15,6 +15,7 @@ import (
 	"github.com/openbuilders/batch-sender/internal/batcher"
 	"github.com/openbuilders/batch-sender/internal/env"
 	"github.com/openbuilders/batch-sender/internal/log"
+	"github.com/openbuilders/batch-sender/internal/notifier"
 	"github.com/openbuilders/batch-sender/internal/queue"
 	"github.com/openbuilders/batch-sender/internal/repository/postgres"
 	"github.com/openbuilders/batch-sender/internal/sender"
@@ -116,6 +117,12 @@ func main() {
 		ExpirationCheckInterval: 30 * time.Second,
 	}, lightclientAPI, mnemonic, isTestnet, pgClient, batcher.Batches)
 
+	notifier := notifier.New(&notifier.Config{
+		BatchSize:    100,
+		PollInterval: 1 * time.Second,
+		DBTimeout:    3 * time.Second,
+	}, queueManager, pgClient)
+
 	server := api.NewServer(&config, queueManager)
 
 	// Graceful shutdown handling
@@ -131,6 +138,16 @@ func main() {
 
 	errGroup.Go(func() error {
 		server.Start(ctx, stop)
+		return nil
+	})
+
+	errGroup.Go(func() error {
+		err := notifier.Start(ctx)
+		if err != nil {
+			slog.Error("notifier exited with an error", "error", err)
+			return err
+		}
+
 		return nil
 	})
 

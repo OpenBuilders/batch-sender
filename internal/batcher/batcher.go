@@ -98,6 +98,8 @@ func (b *Batcher) Run(ctx context.Context) {
 			case err := <-closeChan:
 				b.log.Debug("channel is closed, reconnecting", "error", err)
 			}
+
+			time.Sleep(1 * time.Second)
 		}
 		return nil
 	})

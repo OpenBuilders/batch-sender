@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"math/rand"
+	// "math/rand"
 	"strings"
 	"sync"
 	"time"
@@ -75,14 +75,14 @@ func (w *Wallet) PrepareMessage(ctx context.Context, batch *types.Batch) (
 
 // SendMessage broadcasts the message created by the PrepareMessage method.
 func (w *Wallet) SendMessage(ctx context.Context, extMsg *tlb.ExternalMessage) error {
-	return fmt.Errorf("No sending today")
+	/*return fmt.Errorf("No sending today")
 	// Seed the random number generator
 	rand.Seed(time.Now().UnixNano())
 
 	// 50% chance
 	if rand.Intn(2) != 0 {
 		return fmt.Errorf("out of luck, not sending")
-	}
+	}*/
 
 	block, err := w.client.CurrentMasterchainInfo(ctx)
 	if err != nil {

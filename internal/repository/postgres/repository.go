@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/openbuilders/batch-sender/internal/types"
@@ -464,4 +465,90 @@ func (p *Postgres) ResubmitExpiredBatches(ctx context.Context,
 	}
 
 	return expiredBatches, nil
+}
+
+func (p *Postgres) GetTransfersBatchResults(ctx context.Context, maxItems int64,
+) ([]types.BatchResult, error) {
+	stmt := `
+	WITH new_batches AS (
+		SELECT uuid as batch_uuid, transfer_ids, status
+		FROM sender.batch b
+		LEFT JOIN sender.notification n
+		ON b.uuid = n.batch_uuid
+		WHERE b.status IN ('success') AND n.batch_uuid IS NULL
+		LIMIT @max_items
+	), new_batches_with_message AS (
+		SELECT b.*, m.uuid as message_uuid
+		FROM new_batches b
+		LEFT JOIN LATERAL (
+			SELECT *
+			FROM sender.external_message m
+			WHERE b.batch_uuid = m.batch_uuid
+			ORDER BY expired_at DESC
+			LIMIT 1
+		) m
+		ON TRUE
+		WHERE m.uuid IS NOT NULL
+	), new_batches_with_transaction AS (
+		SELECT
+			b.batch_uuid, UNNEST(b.transfer_ids) as transfer_id,
+			t.hash as tx_hash, b.status
+		FROM new_batches_with_message b
+		JOIN sender.transaction t
+		ON b.message_uuid = t.message_uuid
+	), new_transfers AS (
+		SELECT b.batch_uuid, t.order_id, b.tx_hash, b.status
+		FROM new_batches_with_transaction b
+		JOIN sender.transfer t
+		ON t.id = b.transfer_id
+	)
+	SELECT DISTINCT batch_uuid, order_id, tx_hash, status
+	FROM new_transfers
+	`
+
+	rows, err := p.pg.Query(ctx, stmt, pgx.NamedArgs{
+		"max_items": maxItems,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("couldn't get new transfers batch results: %w", err)
+	}
+
+	defer rows.Close()
+
+	results, err := pgx.CollectRows(rows, pgx.RowToStructByName[types.BatchResult])
+	if err != nil {
+		return nil, fmt.Errorf("transfers parsing error: %w", err)
+	}
+
+	return results, nil
+}
+
+func (p *Postgres) PersistProcessedBatchResults(ctx context.Context,
+	batchUUIDs []string) error {
+	p.log.Debug(
+		"Persisting batch results",
+		"batchUUIDs", batchUUIDs,
+	)
+
+	values := make([]string, len(batchUUIDs))
+	for i, batchUUID := range batchUUIDs {
+		values[i] = fmt.Sprintf("('%s')", batchUUID)
+	}
+
+	stmt := fmt.Sprintf(`
+	INSERT INTO sender.notification
+		(batch_uuid)
+	VALUES %s
+	ON CONFLICT (batch_uuid)
+	DO UPDATE SET
+		updated_at = NOW()
+	`, strings.Join(values, ", "))
+
+	_, err := p.pg.Exec(ctx, stmt)
+	if err != nil {
+		return fmt.Errorf(
+			"inserting batch results %v error: %w", batchUUIDs, err)
+	}
+
+	return nil
 }

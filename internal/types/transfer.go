@@ -23,6 +23,13 @@ type Transfer struct {
 	Comment string  `db:"comment"`
 }
 
+type BatchResult struct {
+	BatchUUID string      `db:"batch_uuid"`
+	OrderID   string      `db:"order_id"`
+	TxHash    string      `db:"tx_hash"`
+	Status    BatchStatus `db:"status"`
+}
+
 type DataItem struct {
 	Wallet  string  `json:"wallet"`
 	Amount  float64 `json:"amount"`
