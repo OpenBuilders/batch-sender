@@ -3,7 +3,6 @@ package batcher
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"log/slog"
 	"time"
 
@@ -53,7 +52,19 @@ func (b *Batcher) Run(ctx context.Context) {
 
 	b.queue.RegisterWorker(func(wrkCtx context.Context, conn *amqp.Connection) error {
 		b.log.Debug("started batcher worker")
+		var ch *amqp.Channel
+		var err error
+
+	main:
 		for {
+			time.Sleep(500 * time.Millisecond)
+
+			if ch != nil && !ch.IsClosed() {
+				b.log.Debug("closing the channel", "ch", ch)
+				ch.Close()
+			}
+
+			b.log.Debug("reopening the channel", "ch", ch)
 			select {
 			case <-wrkCtx.Done():
 				b.log.Debug("worker shutting down due to manager reconnect")
@@ -61,15 +72,14 @@ func (b *Batcher) Run(ctx context.Context) {
 			default:
 			}
 
-			ch, err := conn.Channel()
+			ch, err = conn.Channel()
 			if err != nil {
 				b.log.Error("channel open failed", "error", err)
 				time.Sleep(time.Second)
 				continue
 			}
 
-			closeChan := ch.NotifyClose(make(chan *amqp.Error, 1))
-			ch.NotifyClose(closeChan)
+			ch.Qos(b.config.BatchSize, 0, false)
 
 			q, err := ch.QueueDeclare(
 				string(queue.QueueTONTransfer),
@@ -89,66 +99,59 @@ func (b *Batcher) Run(ctx context.Context) {
 				b.log.Error("message consume failed", "error", err)
 				return err
 			}
-			go b.consumeMessages(wrkCtx, messages)
 
-			select {
-			case <-wrkCtx.Done():
-				b.log.Debug("context cancelled during consumption")
-				return nil
-			case err := <-closeChan:
-				b.log.Debug("channel is closed, reconnecting", "error", err)
+			var unbatched int64
+			updateInterval := b.config.BatchTimeout
+
+			b.log.Debug("consuming messages")
+
+		consume:
+			for {
+				select {
+				case <-wrkCtx.Done():
+					b.log.Info("Stopping consumer...")
+					return wrkCtx.Err()
+				case msg, ok := <-messages:
+					if !ok {
+						b.log.Debug("channel is closed")
+						break main
+					}
+
+					count, err := b.handleMessage(msg)
+					if err != nil {
+						b.log.Error("message handling error", "error", err)
+						break consume
+					}
+
+					unbatched += count
+
+					if unbatched >= int64(b.config.BatchSize) {
+						b.log.Debug(
+							"Reached the max batch size, processing right away",
+							"max", b.config.BatchSize,
+						)
+						created := b.createBatch()
+						if created {
+							updateInterval = b.config.BatchDelay
+						} else {
+							updateInterval = b.config.BatchTimeout
+						}
+						unbatched = 0
+					}
+
+				case <-time.After(updateInterval):
+					created := b.createBatch()
+					if created {
+						updateInterval = b.config.BatchDelay
+					} else {
+						updateInterval = b.config.BatchTimeout
+					}
+					unbatched = 0
+				}
 			}
-
-			time.Sleep(1 * time.Second)
 		}
 		return nil
 	})
-}
-
-func (b *Batcher) consumeMessages(ctx context.Context,
-	messages <-chan amqp.Delivery) error {
-	var unbatched int64
-	updateInterval := b.config.BatchTimeout
-
-	for {
-		select {
-		case <-ctx.Done():
-			b.log.Info("Stopping consumer...")
-			return ctx.Err()
-		case msg, ok := <-messages:
-			if !ok {
-				b.log.Debug("channel is closed")
-				return fmt.Errorf("channel is closed")
-			}
-
-			count, _ := b.handleMessage(msg)
-			unbatched += count
-
-			if unbatched >= int64(b.config.BatchSize) {
-				b.log.Debug(
-					"Reached the max batch size, processing right away",
-					"max", b.config.BatchSize,
-				)
-				created := b.createBatch()
-				if created {
-					updateInterval = b.config.BatchDelay
-				} else {
-					updateInterval = b.config.BatchTimeout
-				}
-				unbatched = 0
-			}
-
-		case <-time.After(updateInterval):
-			// b.log.Debug("Batch interval tick")
-			created := b.createBatch()
-			if created {
-				updateInterval = b.config.BatchDelay
-			} else {
-				updateInterval = b.config.BatchTimeout
-			}
-			unbatched = 0
-		}
-	}
 }
 
 // handleMessage parses the incoming message and persists in the database,
@@ -184,7 +187,6 @@ func (b *Batcher) handleMessage(message amqp.Delivery) (
 		b.log.Info("duplicate transfers, skipping", "msg", msg)
 	}
 
-	b.log.Debug("acking")
 	err = message.Ack(false)
 	if err != nil {
 		b.log.Error(

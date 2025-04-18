@@ -105,6 +105,7 @@ func (q *Queue) reconnectLoop(ctx context.Context) error {
 }
 
 func (q *Queue) connect(ctx context.Context) error {
+	q.log.Debug("connecting to rabbit mq")
 	conn, err := amqp.DialConfig(q.config.URL, amqp.Config{
 		Dial: amqp.DefaultDial(q.config.ConnectTimeout),
 	})
@@ -112,7 +113,28 @@ func (q *Queue) connect(ctx context.Context) error {
 		return err
 	}
 
+	// cancel old workers
+	q.mu.Lock()
+	if q.cancel != nil {
+		q.cancel()
+	}
+	if q.conn != nil {
+		q.conn.Close()
+	}
+
 	ctxWithCancel, cancel := context.WithCancel(ctx)
+	q.ctx = ctxWithCancel
+	q.cancel = cancel
+	q.conn = conn
+
+	workers := append([]WorkerFunc{}, q.workers...)
+	q.mu.Unlock()
+
+	for _, w := range workers {
+		go w(ctxWithCancel, q.conn)
+	}
+
+	/* ctxWithCancel, cancel := context.WithCancel(ctx)
 	q.ctx = ctxWithCancel
 	q.cancel = cancel
 
@@ -123,7 +145,7 @@ func (q *Queue) connect(ctx context.Context) error {
 
 	for _, w := range workers {
 		go w(ctxWithCancel, q.conn)
-	}
+	}*/
 
 	return nil
 }
@@ -132,7 +154,7 @@ func (q *Queue) cleanup() {
 	q.log.Debug("In cleanup")
 
 	// cancel context of all the workers
-	q.cancel()
+	// q.cancel()
 
 	/*q.mu.Lock()
 	defer q.mu.Unlock()
@@ -141,7 +163,7 @@ func (q *Queue) cleanup() {
 		_ = q.conn.Close()
 	}*/
 
-	q.conn = nil
+	// q.conn = nil
 }
 
 func (q *Queue) Publish(queueName QueueName, message []byte) error {
