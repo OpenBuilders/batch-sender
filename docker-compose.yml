@@ -32,6 +32,19 @@ services:
       market_net:
         ipv4_address: 172.22.2.4
 
+  app:
+    build: .
+    environment:
+      - LOG_LEVEL=INFO
+      - POSTGRES_URL=postgres://postgres:dev@db:5432/postgres?connect_timeout=1
+      - RABBIT_URL=amqp://guest:guest@rabbitmq:5672/
+    depends_on:
+      - db
+      - rabbitmq
+    networks:
+      market_net:
+        ipv4_address: 172.22.2.6
+
 networks:
   market_net:
     external: true
